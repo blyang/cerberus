@@ -1,0 +1,23 @@
+/* Cerberus — minimal styles layered on Tailwind. */
+.status-badge { display:inline-flex; align-items:center; padding:2px 8px; font-size:11px; font-weight:600; border-radius:9999px; }
+.sev-Blocking { color:#7f1d1d; background:#fee2e2; }
+.sev-Recommended { color:#1e3a8a; background:#dbeafe; }
+.sev-Conditional { color:#365314; background:#ecfccb; }
+
+.st-Pass { color:#065f46; background:#d1fae5; }
+.st-Fail { color:#7f1d1d; background:#fee2e2; }
+.st-Manual { color:#92400e; background:#fef3c7; }
+.st-Needs-Review { color:#9a3412; background:#fed7aa; }
+.st-NA { color:#475569; background:#e2e8f0; }
+.st-Pending { color:#475569; background:#f1f5f9; }
+.st-Running { color:#1e293b; background:#e0e7ff; }
+
+.row-running { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { background:#f8fafc; } 50% { background:#e0e7ff; } }
+
+details > summary { cursor: pointer; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary:after { content: " ▸"; color:#94a3b8; font-size:11px; }
+details[open] > summary:after { content: " ▾"; }
+
+pre.detail-block { font-size:11px; background:#f8fafc; padding:8px; border-radius:4px; max-height:200px; overflow:auto; white-space:pre-wrap; word-break:break-word; }

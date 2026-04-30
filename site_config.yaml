@@ -1,0 +1,65 @@
+# Cerberus site config. Operator-edited.
+# Per-host overrides keyed by exact host (e.g. www.strikingly.com).
+# Unknown hosts fall back to `defaults`; checks needing host-specific data report N/A.
+
+hosts:
+  www.strikingly.com:
+    apex_host: strikingly.com
+    sitemap_url: https://www.strikingly.com/sitemap-seo-pages.xml
+    robots_url: https://www.strikingly.com/robots.txt
+    pipeline_url_prefixes:
+      - /s/website/
+      - /s/portfolio/
+      - /s/landing-page/
+      - /s/
+    allowed_bots:
+      - Googlebot
+      - Bingbot
+      - OAI-SearchBot
+      - ClaudeBot
+      - PerplexityBot
+  www.preprod.strikingly.com:
+    apex_host: preprod.strikingly.com
+    sitemap_url: https://www.preprod.strikingly.com/sitemap-seo-pages.xml
+    robots_url: https://www.preprod.strikingly.com/robots.txt
+    pipeline_url_prefixes:
+      - /s/
+    allowed_bots:
+      - Googlebot
+      - Bingbot
+      - OAI-SearchBot
+      - ClaudeBot
+      - PerplexityBot
+
+defaults:
+  allowed_bots:
+    - Googlebot
+    - Bingbot
+    - OAI-SearchBot
+    - ClaudeBot
+    - PerplexityBot
+
+# Optional: GSC service account credentials path (used for H3 Googlebot render diff).
+# If absent or quota exhausted, H3 falls back to Manual.
+gsc_credentials_path: ./gsc-creds.json
+
+# Default URL pre-filled in the input field.
+default_url: https://www.preprod.strikingly.com/s/ai_site_builder
+
+# Vision LLM config — auto-classifies the previously-manual checks A2, C7, E4.
+# Disable by setting enabled: false to fall back to manual instructions in the report.
+vision:
+  enabled: true
+  primary:
+    provider: gemini                 # gemini | qwen
+    model: gemini-2.5-flash-lite
+    api_key_env: GEMINI_API_KEY
+  fallback:
+    provider: qwen
+    # NOTE: Alibaba's current public Qwen vision model name is `qwen3-vl-plus`.
+    # Override here if you have access to a newer SKU on your account.
+    model: qwen3-vl-plus
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+  confidence_threshold: 0.70         # below this on the primary, retry via fallback
+  per_run_budget_usd: 0.10           # safety cap; if exceeded, remaining vision checks fall back to Manual

@@ -1,6 +1,8 @@
 .venv/
 data/cerberus.db*
+data/screenshots/
 __pycache__/
 *.pyc
 node_modules/
 .codex-runtime/
+.env
