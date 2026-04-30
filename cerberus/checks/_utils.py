@@ -114,6 +114,9 @@ class FetchResult:
         return BeautifulSoup(self.text, "lxml")
 
 
+MAX_REDIRECT_HOPS = 8
+
+
 async def _fetch(
     url: str,
     method: str = "GET",
@@ -121,6 +124,13 @@ async def _fetch(
     follow_redirects: bool = True,
     extra_headers: dict[str, str] | None = None,
 ) -> FetchResult:
+    """SSRF-safe fetch.
+
+    httpx's built-in `follow_redirects=True` doesn't re-run our `validate_target_url` guard on
+    each Location target, so an attacker who controls any public web server could 302-redirect
+    us into 127.0.0.1 / 169.254.169.254 / RFC1918. We disable httpx's auto-follow and walk the
+    chain ourselves, calling `validate_target_url` on every hop.
+    """
     try:
         await validate_target_url(url)
     except UnsafeTargetURL as exc:
@@ -128,23 +138,55 @@ async def _fetch(
     headers = {"User-Agent": user_agent, "Accept-Language": "en-US,en;q=0.9"}
     if extra_headers:
         headers.update(extra_headers)
+    history: list[tuple[int, str]] = []
+    current_url = url
+    current_method = method
     try:
         async with httpx.AsyncClient(
             timeout=DEFAULT_TIMEOUT,
-            follow_redirects=follow_redirects,
+            follow_redirects=False,
             http2=True,
             headers=headers,
         ) as client:
-            r = await client.request(method, url)
-            history = [(h.status_code, str(h.headers.get("location", ""))) for h in r.history]
+            for hop in range(MAX_REDIRECT_HOPS + 1):
+                r = await client.request(current_method, current_url)
+                if not follow_redirects or r.status_code not in (301, 302, 303, 307, 308):
+                    return FetchResult(
+                        url=url,
+                        status_code=r.status_code,
+                        headers={k.lower(): v for k, v in r.headers.items()},
+                        text=r.text if current_method != "HEAD" else "",
+                        content=r.content if current_method != "HEAD" else b"",
+                        final_url=str(r.url),
+                        history=history,
+                    )
+                location = r.headers.get("location")
+                if not location:
+                    return FetchResult(
+                        url=url, status_code=r.status_code,
+                        headers={k.lower(): v for k, v in r.headers.items()},
+                        text="", content=b"", final_url=str(r.url), history=history,
+                        error=f"redirect with no Location header (status {r.status_code})",
+                    )
+                next_url = str(httpx.URL(current_url).join(location))
+                history.append((r.status_code, next_url))
+                # SSRF guard: every redirect target must independently pass validation.
+                try:
+                    await validate_target_url(next_url)
+                except UnsafeTargetURL as exc:
+                    return FetchResult(
+                        url=url, status_code=0, headers={}, text="", content=b"",
+                        final_url=current_url, history=history,
+                        error=f"redirect to unsafe target: {exc}",
+                    )
+                # 303 always switches to GET; 301/302 typically do too for non-GET; 307/308 preserve method.
+                if r.status_code == 303 or (r.status_code in (301, 302) and current_method != "HEAD"):
+                    current_method = "GET"
+                current_url = next_url
             return FetchResult(
-                url=url,
-                status_code=r.status_code,
-                headers={k.lower(): v for k, v in r.headers.items()},
-                text=r.text if method != "HEAD" else "",
-                content=r.content if method != "HEAD" else b"",
-                final_url=str(r.url),
-                history=history,
+                url=url, status_code=0, headers={}, text="", content=b"",
+                final_url=current_url, history=history,
+                error=f"redirect chain exceeded {MAX_REDIRECT_HOPS} hops",
             )
     except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:
         return FetchResult(
@@ -153,7 +195,7 @@ async def _fetch(
             headers={},
             text="",
             final_url=url,
-            history=[],
+            history=history,
             error=f"{type(exc).__name__}: {exc}",
         )
 

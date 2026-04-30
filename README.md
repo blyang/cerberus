@@ -74,6 +74,18 @@ At Gemini 2.5 Flash-Lite pricing (~$0.0002 per image), full-run vision cost is ~
 
 The pass conditions and verify steps come from a Google Sheet (referenced in `seo_geo_checker_brief.md`). When that sheet's "How to Verify" or "Pass Condition" columns change, the corresponding entry in `cerberus/verify_steps.py` should be updated.
 
+## Threat model & known limitations
+
+Cerberus is designed for use on a **private VM bound to Tailscale**. The brief explicitly out-of-scopes authentication on the checker itself; identity comes from the operator's tailnet.
+
+The tool fetches operator-supplied URLs and **secondary URLs derived from each page** (canonical hrefs, sitemap entries, hreflang alternates, og:image, JSON-LD URLs). Those secondary URLs are attacker-influenceable if the audited page contains attacker-controlled content. To bound that surface:
+
+- ✅ **Initial-host SSRF guard** (`cerberus/checks/_utils.py:validate_target_url`): every URL is DNS-resolved and rejected if the host is loopback / RFC1918 / link-local / multicast / reserved / unspecified. Applied to the operator's URL and every secondary fetch.
+- ✅ **Redirect-chain SSRF guard**: httpx auto-redirects are disabled; we walk redirects manually and re-validate every Location target, capped at 8 hops.
+- ⚠️ **DNS-rebinding residual risk**: an attacker controlling DNS for `attacker.example` could return a public IP at validation time and a private IP when the actual request is issued (a subsequent resolution by httpx / Playwright / Lighthouse). Mitigation requires pinning a single resolved IP through the entire request lifecycle across three different networking stacks; not implemented. **Don't run Cerberus against URLs you suspect are adversarial.**
+- ⚠️ **No request-time auth**: any device on the Tailscale tailnet that can reach `:8000` can list and read all runs and submit new ones. This is by design (per the brief) and relies on Tailscale's identity boundary. If you ever expose port 8000 beyond the tailnet, add an auth layer first.
+- ⚠️ **Error verbosity**: HTTP fetch / Playwright / Lighthouse / parser exceptions are persisted into `check_results.details_json` and exposed via `/api/runs/{id}`. They can include URLs, parse internals, and library error text. No credentials leak (those go through the redacted `gsc.py` path), but consider this when sharing run data.
+
 ## License
 
 MIT — see `LICENSE`.
