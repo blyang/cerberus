@@ -34,10 +34,14 @@ async def inspect_url(url: str, creds_path: str | None, site_url: str | None = N
         return {"error": "gsc credentials not configured"}
 
     def _do() -> dict[str, Any]:
+        # User-facing error strings are intentionally generic — full exception text (which can
+        # contain credential file paths, service-account email, project IDs, raw Google error
+        # bodies) goes to the server log only.
         try:
             from googleapiclient.errors import HttpError  # type: ignore
         except Exception as exc:
-            return {"error": f"google-api-python-client missing: {exc}"}
+            log.warning("gsc: google-api-python-client missing: %s", exc)
+            return {"error": "gsc client library missing"}
         try:
             service = _build_service(creds_path)
             body = {
@@ -50,13 +54,15 @@ async def inspect_url(url: str, creds_path: str | None, site_url: str | None = N
             return {"raw": resp}
         except HttpError as exc:
             status = exc.resp.status if exc.resp else 0
+            log.warning("gsc HttpError status=%s: %s", status, exc)
             if status == 403:
-                return {"error": f"gsc forbidden (service account not added as user on property?): {exc}"}
+                return {"error": "gsc forbidden (service account not authorized on property)"}
             if status == 429:
                 return {"error": "gsc quota exhausted"}
-            return {"error": f"gsc http error: {exc}"}
+            return {"error": f"gsc http error (status {status})"}
         except Exception as exc:
-            return {"error": f"gsc call failed: {type(exc).__name__}: {exc}"}
+            log.warning("gsc call failed: %s: %s", type(exc).__name__, exc)
+            return {"error": f"gsc call failed ({type(exc).__name__})"}
 
     return await asyncio.to_thread(_do)
 

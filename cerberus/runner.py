@@ -194,10 +194,13 @@ class RunManager:
                 )
             except Exception as exc:
                 log.exception("check %s failed", spec.id)
+                # Don't echo the raw exception text into the persisted details — it can include
+                # filesystem paths, internal URLs, or third-party error bodies that we don't want
+                # exposed via /api/runs/{id} to anyone on the tailnet. Server log has the full trace.
                 result = CheckResult(
                     status=Status.FAIL,
-                    summary=f"Check raised: {exc}",
-                    details={"error": str(exc), "type": type(exc).__name__},
+                    summary=f"Check raised an internal error ({type(exc).__name__}); see server logs.",
+                    details={"error_type": type(exc).__name__},
                 )
             runtime_ms = int((time.time() - t0) * 1000)
             await asyncio.to_thread(self.eta.record, spec.id, runtime_ms)

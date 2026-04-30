@@ -79,14 +79,16 @@ async def classify(
     fallback = cfg.fallback
     if fallback and _api_key(fallback):
         fb_result = await _call(fallback, system_prompt, user_prompt, images, image_mime)
-        if fb_result.error is None:
+        if fb_result.error is None and fb_result.confidence >= cfg.confidence_threshold:
             return fb_result
-        log.info("vision: fallback %s also failed (err=%s)", fallback.model, fb_result.error)
+        log.info("vision: fallback %s low/error (conf=%s err=%s)", fallback.model, fb_result.confidence, fb_result.error)
 
-    # Neither succeeded confidently.
-    return primary_result if primary_result.error is None else VisionVerdict(
-        "pass", 0.0, "both providers failed/unconfigured — falling back to manual",
-        "fallback-to-manual", "", error=primary_result.error,
+    # Both attempts left us without a confident verdict — surface the manual sentinel so the
+    # caller routes to Status.MANUAL rather than silently emitting a low-confidence Pass/Fail.
+    return VisionVerdict(
+        "pass", 0.0, "both providers below confidence threshold or failed — falling back to manual",
+        "fallback-to-manual", "",
+        error=primary_result.error or "below confidence threshold",
     )
 
 

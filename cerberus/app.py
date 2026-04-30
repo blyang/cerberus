@@ -91,8 +91,19 @@ async def api_get_run(run_id: str) -> dict[str, Any]:
 @app.get("/api/runs/{run_id}/screenshots/{name}.png")
 async def api_run_screenshot(run_id: str, name: str) -> FileResponse:
     from . import screenshots as _ss
-    path = _ss.SCREENSHOT_DIR / run_id / f"{name}.png"
-    if not path.exists() or ".." in run_id or ".." in name:
+    # Validate path components BEFORE any filesystem access — '..' or '/' would let an attacker
+    # traverse to files outside data/screenshots/. We resolve the final path and confirm it's
+    # still under SCREENSHOT_DIR as a belt-and-suspenders check.
+    if not run_id or not name:
+        raise HTTPException(404, "screenshot not found")
+    if any(c in run_id for c in ("..", "/", "\\", "\x00")) or any(c in name for c in ("..", "/", "\\", "\x00")):
+        raise HTTPException(404, "screenshot not found")
+    path = (_ss.SCREENSHOT_DIR / run_id / f"{name}.png").resolve()
+    try:
+        path.relative_to(_ss.SCREENSHOT_DIR.resolve())
+    except ValueError:
+        raise HTTPException(404, "screenshot not found")
+    if not path.exists():
         raise HTTPException(404, "screenshot not found")
     return FileResponse(path, media_type="image/png")
 
@@ -115,6 +126,11 @@ async def api_run_report_markdown(run_id: str) -> PlainTextResponse:
 
 @app.post("/api/runs/{run_id}/manual/{check_id}")
 async def api_set_manual(run_id: str, check_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    # Verify the run exists first so a bad run_id returns 404 rather than triggering a SQLite
+    # foreign-key 500 (the manual_toggles table FK-references runs.id).
+    run = await asyncio.to_thread(store.get_run, run_id)
+    if not run:
+        raise HTTPException(404, "run not found")
     status = (body.get("status") or "").strip()
     if status not in ("Pass", "Fail"):
         await asyncio.to_thread(store.clear_manual_toggle, run_id, check_id)

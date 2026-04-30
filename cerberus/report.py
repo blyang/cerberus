@@ -190,11 +190,14 @@ def render_markdown(run: dict[str, Any], checks: list[dict[str, Any]],
         "blocking": [], "other_fail": [], "needs_review": [], "manual": [], "pass": [], "na": [], "skipped": [],
     }
     for c in checks:
-        # Apply operator's manual override on top of the auto-result for reporting clarity.
+        # Apply operator's manual override on top of the auto-result. The override applies to
+        # checks parked in either Manual (pure-manual checks like A2/C7/E4 when vision is off)
+        # or Needs Review (partly-automated checks like D3 step 5 / H3 where the operator made
+        # the final call). Auto-classified Pass/Fail are not overridable from the UI.
         marked = manual_toggles.get(c["check_id"])
-        if marked and c["status"] == "Manual":
+        if marked and c["status"] in ("Manual", "Needs Review"):
             c = dict(c)
-            c["status"] = marked  # report it as the operator's call
+            c["status"] = marked
         buckets[_bucket(c)].append(c)
     for k in buckets:
         buckets[k].sort(key=lambda c: (_severity_rank((c.get("details") or {}).get("severity", "")), c["check_id"]))

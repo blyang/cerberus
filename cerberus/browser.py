@@ -122,7 +122,9 @@ async def capture_load_frames(url: str, *, viewport: dict | None = None, throttl
                     "uploadThroughput": 50_000,
                     "latency": 400,
                 })
-            await page.goto(url, wait_until="commit", timeout=30_000)
+            # 60s budget: Slow-3G throttling at 50KB/s means even a modestly-sized initial HTML
+            # payload (~1MB) can take 20+s to first byte; need headroom over the 9s capture window.
+            await page.goto(url, wait_until="commit", timeout=60_000)
             frames: list[dict] = []
             checkpoints_ms = [500, 1000, 2000, 4000, 6000, 9000]
             import asyncio as _asyncio
