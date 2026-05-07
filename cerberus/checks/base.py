@@ -18,6 +18,23 @@ class Severity(str, Enum):
     CONDITIONAL = "Conditional"
 
 
+class Env(str, Enum):
+    """Deployment environment of the URL under test.
+
+    Operators pick one at run time; checks declare which envs they're meaningful in via
+    `applicable_envs` on @register. Mismatched checks short-circuit to N/A — preprod can't
+    legitimately verify production CDN cache headers, sitemap availability, etc.
+    """
+    PRODUCTION = "production"
+    UAT = "uat"
+    PREPROD = "preprod"
+    STAGING = "staging"
+    LOCAL = "local"
+
+
+ALL_ENVS = frozenset(Env)
+
+
 class Status(str, Enum):
     PENDING = "Pending"
     RUNNING = "Running"
@@ -68,6 +85,7 @@ class CheckSpec:
     title: str
     func: Callable[["CheckContext"], Awaitable[CheckResult]]
     default_estimate_ms: int = 1000
+    applicable_envs: frozenset[Env] = ALL_ENVS
 
 
 @dataclasses.dataclass
@@ -76,6 +94,7 @@ class CheckContext:
     url: str
     site_config: Any  # cerberus.config.SiteConfig
     run_id: str = ""  # populated by the runner for evidence persistence (screenshots, etc.)
+    environment: Env = Env.PRODUCTION
     cache: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     async def get_or_set(self, key: str, factory: Callable[[], Awaitable[Any]]) -> Any:
@@ -101,7 +120,10 @@ def register(
     severity: Severity,
     title: str,
     estimate_ms: int = 1000,
+    applicable_envs: frozenset[Env] | set[Env] | None = None,
 ) -> Callable[[Callable[[CheckContext], Awaitable[CheckResult]]], Callable[[CheckContext], Awaitable[CheckResult]]]:
+    envs = frozenset(applicable_envs) if applicable_envs is not None else ALL_ENVS
+
     def deco(func: Callable[[CheckContext], Awaitable[CheckResult]]) -> Callable[[CheckContext], Awaitable[CheckResult]]:
         _REGISTRY.append(
             CheckSpec(
@@ -111,6 +133,7 @@ def register(
                 title=title,
                 func=func,
                 default_estimate_ms=estimate_ms,
+                applicable_envs=envs,
             )
         )
         return func

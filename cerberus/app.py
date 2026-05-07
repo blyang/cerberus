@@ -18,6 +18,7 @@ from . import report as report_mod
 from . import store
 from .checks import all_checks  # registers all checks at import time
 from .checks._utils import UnsafeTargetURL, validate_target_url
+from .checks.base import Env
 from .runner import Event, manager
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -43,6 +44,8 @@ async def api_config() -> dict[str, Any]:
         "default_url": config.default_url,
         "known_hosts": list(config.hosts.keys()),
         "gsc_configured": bool(config.gsc_credentials_path and Path(config.gsc_credentials_path).exists()),
+        "environments": [e.value for e in Env],
+        "default_environment": Env.PRODUCTION.value,
     }
 
 
@@ -69,7 +72,13 @@ async def api_create_run(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         await validate_target_url(url)
     except UnsafeTargetURL as exc:
         raise HTTPException(400, f"refusing to scan internal/private target: {exc}") from exc
-    run_id = await manager.enqueue(url)
+    env_raw = (body.get("environment") or "production").strip().lower()
+    try:
+        environment = Env(env_raw)
+    except ValueError:
+        valid = ", ".join(e.value for e in Env)
+        raise HTTPException(400, f"environment must be one of: {valid}")
+    run_id = await manager.enqueue(url, environment)
     return {"run_id": run_id}
 
 

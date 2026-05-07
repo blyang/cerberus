@@ -12,6 +12,7 @@
   const $ = (id) => document.getElementById(id);
   const form = $('run-form');
   const urlInput = $('url');
+  const envSelect = $('environment');
   const runBtn = $('run-btn');
   const progressSection = $('progress-section');
   const progressLine = $('progress-line');
@@ -78,6 +79,16 @@
     try {
       const cfg = await fetch('/api/config').then(r => r.json());
       if (cfg && cfg.default_url) urlInput.value = cfg.default_url;
+      const envs = (cfg && cfg.environments) || ['production'];
+      const defaultEnv = (cfg && cfg.default_environment) || 'production';
+      while (envSelect.firstChild) envSelect.removeChild(envSelect.firstChild);
+      envs.forEach(function (v) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        if (v === defaultEnv) opt.selected = true;
+        envSelect.appendChild(opt);
+      });
     } catch (_) { /* config endpoint optional */ }
     const params = new URLSearchParams(window.location.search);
     const runId = params.get('run');
@@ -88,13 +99,14 @@
     ev.preventDefault();
     const url = urlInput.value.trim();
     if (!url) return;
+    const environment = (envSelect && envSelect.value) || 'production';
     runBtn.disabled = true;
     runBtn.textContent = 'Starting...';
     try {
       const res = await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, environment }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();

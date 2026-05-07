@@ -30,7 +30,8 @@ def init() -> None:
               started_at INTEGER NOT NULL,
               completed_at INTEGER,
               summary_json TEXT,
-              error TEXT
+              error TEXT,
+              environment TEXT NOT NULL DEFAULT 'production'
             );
             CREATE TABLE IF NOT EXISTS check_results (
               run_id TEXT NOT NULL,
@@ -60,6 +61,11 @@ def init() -> None:
             CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
             """
         )
+        # Additive migration for older databases that pre-date the environment column.
+        # SQLite has no `ADD COLUMN IF NOT EXISTS`, so detect and add.
+        cols = {row["name"] for row in cx.execute("PRAGMA table_info(runs)").fetchall()}
+        if "environment" not in cols:
+            cx.execute("ALTER TABLE runs ADD COLUMN environment TEXT NOT NULL DEFAULT 'production'")
 
 
 @contextmanager
@@ -76,12 +82,12 @@ def _connect():
 
 # --- Runs ---
 
-def create_run(url: str) -> str:
+def create_run(url: str, environment: str = "production") -> str:
     run_id = uuid.uuid4().hex[:12]
     with _connect() as cx:
         cx.execute(
-            "INSERT INTO runs(id, url, status, started_at) VALUES (?, ?, 'queued', ?)",
-            (run_id, url, _now_ms()),
+            "INSERT INTO runs(id, url, status, started_at, environment) VALUES (?, ?, 'queued', ?, ?)",
+            (run_id, url, _now_ms(), environment),
         )
     return run_id
 

@@ -15,6 +15,7 @@ from .checks.base import (
     CheckContext,
     CheckResult,
     CheckSpec,
+    Env,
     Severity,
     Status,
     SubStep,
@@ -90,8 +91,8 @@ class RunManager:
             self.channels[run_id] = RunChannel()
         return self.channels[run_id]
 
-    async def enqueue(self, url: str) -> str:
-        run_id = await asyncio.to_thread(store.create_run, url)
+    async def enqueue(self, url: str, environment: Env = Env.PRODUCTION) -> str:
+        run_id = await asyncio.to_thread(store.create_run, url, environment.value)
         # Pre-seed pending check rows so the frontend can render the full list immediately.
         def seed():
             for spec in all_checks():
@@ -134,7 +135,11 @@ class RunManager:
             return
         url = run["url"]
         site_config = await asyncio.to_thread(cfg.load)
-        ctx = CheckContext(url=url, site_config=site_config, run_id=run_id)
+        try:
+            env = Env(run.get("environment") or "production")
+        except ValueError:
+            env = Env.PRODUCTION
+        ctx = CheckContext(url=url, site_config=site_config, run_id=run_id, environment=env)
         ch = self.channel(run_id)
         await asyncio.to_thread(store.set_run_status, run_id, "running")
         await ch.publish(Event("run_started", {"run_id": run_id, "url": url}))
@@ -182,26 +187,39 @@ class RunManager:
                 int(time.time() * 1000), None,
             )
             t0 = time.time()
-            try:
-                async with sem:
-                    result = await asyncio.wait_for(spec.func(ctx), timeout=PER_CHECK_TIMEOUT_S)
-            except asyncio.TimeoutError:
-                log.warning("check %s timed out after %ss", spec.id, PER_CHECK_TIMEOUT_S)
+            # Skip checks that aren't meaningful in this environment (e.g. production CDN
+            # cache headers when running against preprod). Records as N/A so the operator
+            # sees it in the report and remembers to re-run post-deploy.
+            if ctx.environment not in spec.applicable_envs:
+                applicable = sorted(e.value for e in spec.applicable_envs)
                 result = CheckResult(
-                    status=Status.FAIL,
-                    summary=f"Check timed out after {int(PER_CHECK_TIMEOUT_S)}s.",
-                    details={"timeout_s": PER_CHECK_TIMEOUT_S},
+                    status=Status.NA,
+                    summary=f"Not meaningful in {ctx.environment.value}; runs in {', '.join(applicable)}.",
+                    details={"skipped_reason": "environment_mismatch",
+                             "applicable_envs": applicable,
+                             "current_env": ctx.environment.value},
                 )
-            except Exception as exc:
-                log.exception("check %s failed", spec.id)
-                # Don't echo the raw exception text into the persisted details — it can include
-                # filesystem paths, internal URLs, or third-party error bodies that we don't want
-                # exposed via /api/runs/{id} to anyone on the tailnet. Server log has the full trace.
-                result = CheckResult(
-                    status=Status.FAIL,
-                    summary=f"Check raised an internal error ({type(exc).__name__}); see server logs.",
-                    details={"error_type": type(exc).__name__},
-                )
+            else:
+                try:
+                    async with sem:
+                        result = await asyncio.wait_for(spec.func(ctx), timeout=PER_CHECK_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    log.warning("check %s timed out after %ss", spec.id, PER_CHECK_TIMEOUT_S)
+                    result = CheckResult(
+                        status=Status.FAIL,
+                        summary=f"Check timed out after {int(PER_CHECK_TIMEOUT_S)}s.",
+                        details={"timeout_s": PER_CHECK_TIMEOUT_S},
+                    )
+                except Exception as exc:
+                    log.exception("check %s failed", spec.id)
+                    # Don't echo the raw exception text into the persisted details — it can include
+                    # filesystem paths, internal URLs, or third-party error bodies that we don't want
+                    # exposed via /api/runs/{id} to anyone on the tailnet. Server log has the full trace.
+                    result = CheckResult(
+                        status=Status.FAIL,
+                        summary=f"Check raised an internal error ({type(exc).__name__}); see server logs.",
+                        details={"error_type": type(exc).__name__},
+                    )
             runtime_ms = int((time.time() - t0) * 1000)
             await asyncio.to_thread(self.eta.record, spec.id, runtime_ms)
             details = dict(result.details)
