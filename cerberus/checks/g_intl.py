@@ -438,7 +438,15 @@ async def g6(ctx: CheckContext) -> CheckResult:
     # the same path, are not geo-redirects). Operators in a US datacenter won't get useful
     # signal here; everywhere else this catches the common case.
     def _host_path(url: str) -> str:
-        return normalize_url(url).split("://", 1)[-1]
+        p = urlparse(url)
+        host = (p.hostname or "").lower()
+        port = p.port
+        # Drop default ports so http://h:80 and https://h match on a TLS upgrade.
+        if (p.scheme == "http" and port == 80) or (p.scheme == "https" and port == 443):
+            port = None
+        netloc = f"{host}:{port}" if port else host
+        path = p.path.rstrip("/") or "/"
+        return f"{netloc}{path}"
 
     vantage = await _vantage_info()
     redirected = (baseline.final_url
