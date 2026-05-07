@@ -78,7 +78,8 @@ def _render_evidence(details: dict[str, Any]) -> list[str]:
     if not details:
         return []
     payload = {k: v for k, v in details.items()
-               if k not in ("title", "severity", "section", "instruction", "sub_steps", "runtime_ms")}
+               if not k.startswith("_")
+               and k not in ("title", "severity", "section", "instruction", "sub_steps", "runtime_ms")}
     if not payload:
         return []
     # Prefer flat key:value rendering for small payloads; JSON code block for large.
@@ -107,7 +108,11 @@ def _render_check(check: dict[str, Any], audited_url: str = "") -> str:
     lines.append(f"### {cid} — {title}")
     lines.append("")
     lines.append(f"- **Severity:** {severity}")
-    lines.append(f"- **Status:** {check.get('status', '')}")
+    status_str = check.get("status", "")
+    if details.get("_marked_by_operator"):
+        original = details.get("_original_status", "")
+        status_str = f"{status_str} (operator-marked, was: {original})"
+    lines.append(f"- **Status:** {status_str}")
     if summary:
         lines.append(f"- **Result:** {summary}")
     lines.append(f"- **Runtime:** {runtime_str}")
@@ -171,6 +176,8 @@ def _render_compact_table(checks: list[dict[str, Any]]) -> str:
     for c in checks:
         details = c.get("details") or {}
         title = details.get("title", "").replace("|", "\\|")
+        if details.get("_marked_by_operator"):
+            title += f" _(operator-marked, was: {details.get('_original_status', '')})_"
         lines.append(f"| {c['check_id']} | {details.get('severity','')} | {title} |")
     lines.append("")
     return "\n".join(lines)
@@ -194,10 +201,17 @@ def render_markdown(run: dict[str, Any], checks: list[dict[str, Any]],
         # checks parked in either Manual (pure-manual checks like A2/C7/E4 when vision is off)
         # or Needs Review (partly-automated checks like D3 step 5 / H3 where the operator made
         # the final call). Auto-classified Pass/Fail are not overridable from the UI.
+        # Preserve the original status in details so _render_check can label the override
+        # ("Pass (operator-marked, was: Manual)") instead of silently rewriting.
         marked = manual_toggles.get(c["check_id"])
         if marked and c["status"] in ("Manual", "Needs Review"):
+            original_status = c["status"]
             c = dict(c)
             c["status"] = marked
+            c_details = dict(c.get("details") or {})
+            c_details["_original_status"] = original_status
+            c_details["_marked_by_operator"] = True
+            c["details"] = c_details
         buckets[_bucket(c)].append(c)
     for k in buckets:
         buckets[k].sort(key=lambda c: (_severity_rank((c.get("details") or {}).get("severity", "")), c["check_id"]))
@@ -216,6 +230,11 @@ def render_markdown(run: dict[str, Any], checks: list[dict[str, Any]],
         "Passed": len(buckets["pass"]),
         "N/A": len(buckets["na"]),
     }
+    # Audit trail: surface operator overrides in their own section so a Pass that
+    # was actually a manually-marked Manual or Needs-Review doesn't disappear into
+    # the compact-table appendix without context.
+    overridden = [c for bucket in buckets.values() for c in bucket
+                  if (c.get("details") or {}).get("_marked_by_operator")]
 
     lines: list[str] = []
     lines.append("# Cerberus SEO/GEO Pre-Flight Report")
@@ -233,6 +252,20 @@ def render_markdown(run: dict[str, Any], checks: list[dict[str, Any]],
     for label, count in summary_counts.items():
         lines.append(f"| {label} | {count} |")
     lines.append("")
+
+    # Audit trail for operator overrides — visible at the top so a Pass that was
+    # really a Manual/Needs-Review override is never silently buried.
+    if overridden:
+        lines.append("## Operator-marked overrides")
+        lines.append("")
+        lines.append("These checks were re-classified by the operator after a manual review:")
+        lines.append("")
+        for c in overridden:
+            d = c.get("details") or {}
+            orig = d.get("_original_status", "")
+            lines.append(f"- **{c['check_id']}**: {orig} → {c.get('status', '')}"
+                         f" — {c.get('summary', '').splitlines()[0] if c.get('summary') else ''}")
+        lines.append("")
 
     # Quick fix-list at the top.
     if buckets["blocking"] or buckets["other_fail"] or buckets["needs_review"] or buckets["manual"]:

@@ -241,21 +241,38 @@ async def f7(ctx: CheckContext) -> CheckResult:
                        summary="Requires parent/hub page identification (per brief, hub architecture pending).")
 
 
+F8_SAMPLE_CAP = 50
+
+
 @register("F8", section="F", severity=Severity.RECOMMENDED,
           title="Internal links use stable preferred URLs", estimate_ms=8_000)
 async def f8(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     host = (urlparse(ctx.url).hostname or "").lower()
-    internal: list[str] = []
+    raw_internal: list[str] = []
     for a in r.soup.find_all("a", href=True):
         href = a["href"].strip()
         if href.startswith("/") or (host in href):
-            internal.append(href)
-    if not internal:
+            raw_internal.append(href)
+    if not raw_internal:
         return CheckResult(Status.NA, summary="No internal <a href> on page.")
+    # Dedup by absolute URL with query+fragment intact so the sample isn't filled
+    # by 30 copies of the same nav item — but `/pricing?utm_source=nav` and
+    # `/pricing` stay distinct, since the tracking-param check below depends on
+    # both surviving the dedup.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for href in raw_internal:
+        absolute = href if href.startswith("http") else f"{urlparse(ctx.url).scheme}://{host}{href}"
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        deduped.append(href)
+    sample = deduped[:F8_SAMPLE_CAP]
+    unchecked = max(0, len(deduped) - len(sample))
+
     bad_redirects: list[str] = []
     tracked: list[str] = []
-    sample = internal[:25]  # cap to avoid 1000s of HEADs
     for href in sample:
         if "?" in href and re.search(r"\?(utm_|sid=|session=|ref=)", href, re.I):
             tracked.append(href)
@@ -263,15 +280,35 @@ async def f8(ctx: CheckContext) -> CheckResult:
         head = await fetch_url(ctx, absolute, method="HEAD", follow_redirects=False)
         if head.status_code in (301, 302, 307, 308):
             bad_redirects.append(f"{absolute} → {head.headers.get('location','')!r}")
+    coverage = (
+        f"checked {len(sample)} of {len(deduped)} unique internal link(s)"
+        + (f" — {unchecked} unchecked past cap of {F8_SAMPLE_CAP}" if unchecked else "")
+    )
     sub = [
         SubStep("No internal links go through redirects",
                 Status.PASS if not bad_redirects else Status.FAIL,
-                detail=f"sample: {bad_redirects[:3]}" if bad_redirects else f"checked {len(sample)} of {len(internal)}"),
+                detail=(f"sample: {bad_redirects[:3]}; {coverage}" if bad_redirects else coverage)),
         SubStep("No tracking params in internal links",
                 Status.PASS if not tracked else Status.FAIL,
-                detail=f"sample: {tracked[:3]}" if tracked else "clean"),
+                detail=(f"sample: {tracked[:3]}; {coverage}" if tracked else coverage)),
+        # All-links coverage: Pass-on-sample without flagging the unchecked tail
+        # would let a redirecting or tracked link at position 51+ slip through,
+        # even though everything below the cap is clean.
+        SubStep("All unique internal links checked",
+                Status.PASS if unchecked == 0 else Status.NEEDS_REVIEW,
+                detail=(f"all {len(deduped)} unique link(s) checked"
+                        if unchecked == 0
+                        else f"{unchecked} of {len(deduped)} link(s) past cap of {F8_SAMPLE_CAP} not validated")),
     ]
-    return CheckResult.from_substeps("Internal link health.", sub)
+    result = CheckResult.from_substeps("Internal link health.", sub)
+    result.details.update({
+        "raw_link_count": len(raw_internal),
+        "unique_link_count": len(deduped),
+        "checked_count": len(sample),
+        "unchecked_count": unchecked,
+        "sample_cap": F8_SAMPLE_CAP,
+    })
+    return result
 
 
 @register("F9", section="F", severity=Severity.BLOCKING,
