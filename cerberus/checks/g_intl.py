@@ -13,6 +13,8 @@ import asyncio
 import re
 from urllib.parse import urlparse
 
+import httpx
+
 from ._utils import (
     UA_CHROME_DESKTOP,
     UA_GOOGLEBOT,
@@ -35,6 +37,32 @@ NA_NO_CLUSTER = "No hreflang alternates declared on this page → no locale clus
 # Hard cap to keep cluster runs from blowing up ETA on pages with 50+ locales.
 MAX_LOCALES = 30
 LOCALE_FETCH_CONCURRENCY = 6
+
+# Process-lifetime cache for cerberus's own outbound IP geolocation (used by G6 to know
+# what vantage point its fetches represent). Looked up at most once per process; degrades
+# gracefully on network failure.
+_VANTAGE_CACHE: dict[str, str] | None = None
+
+
+async def _vantage_info() -> dict[str, str]:
+    global _VANTAGE_CACHE
+    if _VANTAGE_CACHE is not None:
+        return _VANTAGE_CACHE
+    out = {"ip": "unknown", "country": "unknown", "city": "unknown"}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get("https://ipinfo.io/json")
+        if r.status_code == 200:
+            d = r.json()
+            out = {
+                "ip": str(d.get("ip") or "unknown"),
+                "country": str(d.get("country") or "unknown"),
+                "city": str(d.get("city") or "unknown"),
+            }
+    except Exception:
+        pass
+    _VANTAGE_CACHE = out
+    return out
 
 
 def _parse_hreflang_links(html: str) -> list[tuple[str, str]]:
@@ -403,10 +431,24 @@ async def g6(ctx: CheckContext) -> CheckResult:
             detail=(f"baseline = cookie variant" if base_sig == cookie_sig
                     else "diverged — content switched via cookie"),
         ),
-        SubStep(
-            "IP-based geo redirection (manual verification)",
-            Status.NEEDS_REVIEW,
-            detail="Cerberus can't simulate non-US IP; verify from a non-US location with curl + a VPN/proxy.",
-        ),
     ]
+    # Geo redirect: cerberus's outbound IP IS the vantage. If the audited URL redirects to
+    # a different path/host from this vantage, treat it as evidence of geo-routing.
+    # Scheme/trailing-slash differences are normalized away. Operators in a US datacenter
+    # won't get useful signal here; everywhere else this catches the common case.
+    vantage = await _vantage_info()
+    redirected = (baseline.final_url
+                  and normalize_url(baseline.final_url) != normalize_url(ctx.url))
+    if redirected:
+        sub.append(SubStep(
+            f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
+            Status.FAIL,
+            detail=f"audited URL redirected to {baseline.final_url}; chain: {baseline.history[:3]}",
+        ))
+    else:
+        sub.append(SubStep(
+            f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
+            Status.PASS,
+            detail=f"baseline stayed at {ctx.url}",
+        ))
     return CheckResult.from_substeps("Locale-adaptive serving.", sub)
