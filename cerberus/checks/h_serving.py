@@ -44,6 +44,12 @@ def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a[:50_000], b[:50_000]).ratio()
 
 
+def _normalize_for_compare(s: str) -> str:
+    """Casefold + collapse whitespace + drop nbsp. Keeps SequenceMatcher from being fooled
+    by CSS text-transform (rendered innerText is uppercase; raw HTML is mixed-case)."""
+    return " ".join(s.replace("\xa0", " ").split()).casefold()
+
+
 @register("H1", section="H", severity=Severity.BLOCKING,
           title="No cloaking or materially different bot-vs-user content", estimate_ms=8_000)
 async def h1(ctx: CheckContext) -> CheckResult:
@@ -78,9 +84,14 @@ async def h2(ctx: CheckContext) -> CheckResult:
     rendered = await browser.render_page(ctx.url)
     if rendered.get("error"):
         return CheckResult(Status.FAIL, summary=f"render failed: {rendered['error']}")
-    raw_text = html_to_text(raw.text or "")
+    # Match scopes: rendered comes from Playwright's `main, article || body` innerText,
+    # so reduce raw HTML to the same region before extracting text. Without this, raw includes
+    # nav/footer/scripts and similarity tanks even on identical primary content.
+    raw_text = html_to_text(_extract_main(raw.text or ""))
     rendered_text = rendered.get("text") or html_to_text(rendered.get("html") or "")
-    sim = _similarity(raw_text, rendered_text)
+    raw_norm = _normalize_for_compare(raw_text)
+    rendered_norm = _normalize_for_compare(rendered_text)
+    sim = _similarity(raw_norm, rendered_norm)
     # CSS/inline tricks check.
     suspicious_html_patterns = [
         r"display\s*:\s*none",
@@ -96,7 +107,7 @@ async def h2(ctx: CheckContext) -> CheckResult:
         SubStep(
             "raw vs. rendered text similarity",
             Status.PASS if sim >= 0.85 else (Status.NEEDS_REVIEW if sim >= 0.7 else Status.FAIL),
-            detail=f"similarity: {sim:.3f}; raw_len={len(raw_text)}; rendered_len={len(rendered_text)}",
+            detail=f"similarity: {sim:.3f}; raw_len={len(raw_norm)}; rendered_len={len(rendered_norm)}",
         ),
         SubStep(
             "no CSS hiding tricks in raw HTML",
