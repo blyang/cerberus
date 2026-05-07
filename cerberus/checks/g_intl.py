@@ -71,7 +71,28 @@ async def _build_cluster(ctx: CheckContext) -> dict:
 
     async def factory() -> dict:
         page = await fetch(ctx)
-        alternates = _parse_hreflang_links(page.text or "")
+        # Filter to supported locales when the host config opts in. Operators use this to mute
+        # noise from pages that advertise locales the site doesn't actually serve (e.g. preprod
+        # advertising `vi` while no Vietnamese version exists). x-default is always retained.
+        # Apply the same filter to every locale page's alternates (reciprocity in G3) so the
+        # audited and per-locale sets are comparable.
+        host_cfg = ctx.site_config.for_url(ctx.url) if ctx.site_config else None
+        supported = host_cfg.supported_languages if host_cfg else None
+        allowed: set[str] | None = {s.lower() for s in supported} if supported else None
+
+        def _filter(pairs: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+            if allowed is None:
+                return pairs, []
+            kept: list[tuple[str, str]] = []
+            dropped: list[tuple[str, str]] = []
+            for hl, url in pairs:
+                if hl.lower() == "x-default" or hl.lower().split("-", 1)[0] in allowed:
+                    kept.append((hl, url))
+                else:
+                    dropped.append((hl, url))
+            return kept, dropped
+
+        alternates, unsupported_dropped = _filter(_parse_hreflang_links(page.text or ""))
         has_x_default = any(hl.lower() == "x-default" for hl, _ in alternates)
         # Strip x-default from the locale set we crawl since x-default's target overlaps another locale.
         locale_targets: list[str] = []
@@ -102,11 +123,12 @@ async def _build_cluster(ctx: CheckContext) -> dict:
                     }
                 # Need the body for canonical + reciprocity, so do a real GET (memoized via fetch_url).
                 full = await fetch_url(ctx, u)
+                their_alternates, _ = _filter(_parse_hreflang_links(full.text or ""))
                 return u, {
                     "status": full.status_code,
                     "location": "",
                     "canonical": get_canonical_href(full.soup) if full.text else None,
-                    "alternates": _parse_hreflang_links(full.text or ""),
+                    "alternates": their_alternates,
                     "error": full.error,
                 }
 
@@ -125,6 +147,7 @@ async def _build_cluster(ctx: CheckContext) -> dict:
             "per_locale": per_locale,
             "audited_url": ctx.url,
             "audited_alternates_normalized": _normalize_alt_set(alternates),
+            "unsupported_dropped": unsupported_dropped,
         }
 
     task = asyncio.ensure_future(factory())

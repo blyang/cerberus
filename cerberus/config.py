@@ -18,6 +18,10 @@ class HostConfig:
     robots_url: str | None = None
     pipeline_url_prefixes: list[str] = dataclasses.field(default_factory=list)
     allowed_bots: list[str] = dataclasses.field(default_factory=list)
+    # If set, the G checks ignore hreflang alternates whose primary language code (`pt-br` → `pt`,
+    # `zh-CN` → `zh`) is not in this list. Use to mute G failures for locales the page advertises
+    # but the site does not actually serve. None = no filtering (all advertised locales evaluated).
+    supported_languages: list[str] | None = None
     explicit: bool = False  # True if host was found in config; False if inferred
 
     def robots_url_resolved(self) -> str:
@@ -57,6 +61,7 @@ class SiteConfig:
         host = host.lower()
         if host in self.hosts:
             entry = self.hosts[host]
+            sl = entry.get("supported_languages")
             return HostConfig(
                 host=host,
                 apex_host=entry.get("apex_host") or _infer_apex(host),
@@ -64,6 +69,7 @@ class SiteConfig:
                 robots_url=entry.get("robots_url"),
                 pipeline_url_prefixes=list(entry.get("pipeline_url_prefixes", [])),
                 allowed_bots=list(entry.get("allowed_bots") or self.defaults.get("allowed_bots", [])),
+                supported_languages=[s.lower() for s in sl] if sl is not None else None,
                 explicit=True,
             )
         return HostConfig(

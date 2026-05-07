@@ -30,6 +30,27 @@ hosts:
       - OAI-SearchBot
       - ClaudeBot
       - PerplexityBot
+    # Pages currently advertise hreflang for `vi` (Vietnamese) but the site does not
+    # actually serve a Vietnamese version, so G2/G3 fail noisily. List the locales we
+    # genuinely support; `vi` is intentionally omitted until removed from the page.
+    supported_languages:
+      - en
+      - ar
+      - cs
+      - de
+      - es
+      - fi
+      - fr
+      - id
+      - it
+      - ja
+      - nl
+      - 'no'
+      - pl
+      - pt
+      - ro
+      - sv
+      - zh
 
 defaults:
   allowed_bots:
