@@ -49,3 +49,31 @@ Use `/pre-push` per the global CLAUDE.md before pushing. Codex (Phase 2) is
 mandatory; the optional phases are scope-gated. This is a real gate, not
 ceremony — it has caught actual bugs in this codebase (e.g., the empty-`<main>`
 H2 fallback was a Phase 2 finding).
+
+## Parsing HTML attributes
+
+Don't regex attribute values. A regex like `name="description"\s+content="([^"]*)"`
+silently captures nothing on single-quoted pages, so the check sees `""` and
+passes by accident. Use the BS4 helpers in `cerberus/checks/_utils.py`
+(`get_meta`, `get_title_text`, `get_canonical_href`, `collect_static_paths`,
+`collect_insecure_urls`); add siblings there, don't inline. E6/E7/F3 each
+had this bug class until they were converted.
+
+## Asserting redirects: validate Location, not just status
+
+`status_code in (301, 308)` is necessary, not sufficient — a 301 to the wrong
+host or path passed B5 silently until B4/B5/B6 were tightened (verified on
+strikingly preprod, where the apex variant 301s to a different mystrikingly.com
+host). Canonical pattern: `_variant_redirect_status` in `b_indexability.py`.
+It resolves relative Locations, normalizes both sides, and keeps 302/307 as
+Needs Review (not Pass).
+
+## Surface what the check didn't actually evaluate
+
+When a filter, cap, or parse-error path silently shrinks the evaluated set,
+the verdict only applies to the subset — silent shrinking invites false Pass.
+Examples: G3's `supported_languages` filter dropping locales, F8's 50-link
+cap, MAX_LOCALES=30 truncation tail, extruct silently dropping malformed
+JSON-LD blocks. Surface the dropped/truncated/unchecked count as a Needs-
+Review sub-step when non-zero. If the entire set was filtered out, escalate
+to NEEDS_REVIEW — don't fall through to NA, that hides the gap.
