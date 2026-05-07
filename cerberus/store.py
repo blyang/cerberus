@@ -61,8 +61,7 @@ def init() -> None:
             CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
             """
         )
-        # Additive migration for older databases that pre-date the environment column.
-        # SQLite has no `ADD COLUMN IF NOT EXISTS`, so detect and add.
+        # SQLite lacks `ADD COLUMN IF NOT EXISTS`; detect and add for older DBs.
         cols = {row["name"] for row in cx.execute("PRAGMA table_info(runs)").fetchall()}
         if "environment" not in cols:
             cx.execute("ALTER TABLE runs ADD COLUMN environment TEXT NOT NULL DEFAULT 'production'")
@@ -121,7 +120,8 @@ def get_run(run_id: str) -> dict | None:
 def list_runs(limit: int = 20) -> list[dict]:
     with _connect() as cx:
         rows = cx.execute(
-            "SELECT id, url, status, started_at, completed_at FROM runs ORDER BY started_at DESC LIMIT ?",
+            "SELECT id, url, status, started_at, completed_at, environment "
+            "FROM runs ORDER BY started_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]

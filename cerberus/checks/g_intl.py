@@ -49,7 +49,10 @@ def _parse_hreflang_links(html: str) -> list[tuple[str, str]]:
         hl_match = re.search(r'\bhreflang\s*=\s*["\']([^"\']+)["\']', tag, re.I)
         href_match = re.search(r'\bhref\s*=\s*["\']([^"\']+)["\']', tag, re.I)
         if hl_match and href_match:
-            out.append((hl_match.group(1).strip(), href_match.group(1).strip()))
+            hl = hl_match.group(1).strip()
+            href = href_match.group(1).strip()
+            if hl and href:  # skip pairs where either side is whitespace-only
+                out.append((hl, href))
     return out
 
 
@@ -71,11 +74,8 @@ async def _build_cluster(ctx: CheckContext) -> dict:
 
     async def factory() -> dict:
         page = await fetch(ctx)
-        # Filter to supported locales when the host config opts in. Operators use this to mute
-        # noise from pages that advertise locales the site doesn't actually serve (e.g. preprod
-        # advertising `vi` while no Vietnamese version exists). x-default is always retained.
-        # Apply the same filter to every locale page's alternates (reciprocity in G3) so the
-        # audited and per-locale sets are comparable.
+        # Filter mutes G2/G3 noise when a page advertises locales the site doesn't serve.
+        # Applied to per-locale alternates too so reciprocity stays apples-to-apples.
         host_cfg = ctx.site_config.for_url(ctx.url) if ctx.site_config else None
         supported = host_cfg.supported_languages if host_cfg else None
         allowed: set[str] | None = {s.lower() for s in supported} if supported else None

@@ -221,7 +221,10 @@ class RunManager:
                         details={"error_type": type(exc).__name__},
                     )
             runtime_ms = int((time.time() - t0) * 1000)
-            await asyncio.to_thread(self.eta.record, spec.id, runtime_ms)
+            # Don't record env-gated NAs in ETA history — they take ~0 ms and would skew
+            # estimates for future runs in environments where the check actually executes.
+            if ctx.environment in spec.applicable_envs:
+                await asyncio.to_thread(self.eta.record, spec.id, runtime_ms)
             details = dict(result.details)
             details.update({
                 "title": spec.title,

@@ -69,7 +69,8 @@ class SiteConfig:
                 robots_url=entry.get("robots_url"),
                 pipeline_url_prefixes=list(entry.get("pipeline_url_prefixes", [])),
                 allowed_bots=list(entry.get("allowed_bots") or self.defaults.get("allowed_bots", [])),
-                supported_languages=[s.lower() for s in sl] if sl is not None else None,
+                # str() guards against YAML bool coercion (`no`/`yes`/`on`/`off` parse as bools).
+                supported_languages=[str(s).lower() for s in sl] if sl is not None else None,
                 explicit=True,
             )
         return HostConfig(
