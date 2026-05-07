@@ -51,7 +51,7 @@ def _parse_hreflang_links(html: str) -> list[tuple[str, str]]:
         if hl_match and href_match:
             hl = hl_match.group(1).strip()
             href = href_match.group(1).strip()
-            if hl and href:  # skip pairs where either side is whitespace-only
+            if hl and href:
                 out.append((hl, href))
     return out
 
@@ -74,8 +74,7 @@ async def _build_cluster(ctx: CheckContext) -> dict:
 
     async def factory() -> dict:
         page = await fetch(ctx)
-        # Filter mutes G2/G3 noise when a page advertises locales the site doesn't serve.
-        # Applied to per-locale alternates too so reciprocity stays apples-to-apples.
+        # Same filter applied to per-locale alternates so G3 reciprocity stays apples-to-apples.
         host_cfg = ctx.site_config.for_url(ctx.url) if ctx.site_config else None
         supported = host_cfg.supported_languages if host_cfg else None
         allowed: set[str] | None = {s.lower() for s in supported} if supported else None

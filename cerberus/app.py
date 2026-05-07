@@ -72,7 +72,7 @@ async def api_create_run(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         await validate_target_url(url)
     except UnsafeTargetURL as exc:
         raise HTTPException(400, f"refusing to scan internal/private target: {exc}") from exc
-    env_raw = (body.get("environment") or "").strip().lower() or "production"
+    env_raw = (body.get("environment") or "").strip().lower() or Env.PRODUCTION.value
     try:
         environment = Env(env_raw)
     except ValueError:

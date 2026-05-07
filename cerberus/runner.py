@@ -136,7 +136,7 @@ class RunManager:
         url = run["url"]
         site_config = await asyncio.to_thread(cfg.load)
         try:
-            env = Env(run.get("environment") or "production")
+            env = Env(run.get("environment") or Env.PRODUCTION.value)
         except ValueError:
             env = Env.PRODUCTION
         ctx = CheckContext(url=url, site_config=site_config, run_id=run_id, environment=env)
@@ -179,27 +179,27 @@ class RunManager:
         sem = asyncio.Semaphore(HTTP_CONCURRENCY)
 
         async def run_one(spec: CheckSpec) -> None:
-            await ch.publish(Event("check_running", {"check_id": spec.id}))
-            await asyncio.to_thread(
-                store.upsert_check_result,
-                run_id, spec.id, Status.RUNNING.value,
-                "", {"title": spec.title, "severity": spec.severity.value},
-                int(time.time() * 1000), None,
-            )
-            t0 = time.time()
-            # Skip checks that aren't meaningful in this environment (e.g. production CDN
-            # cache headers when running against preprod). Records as N/A so the operator
-            # sees it in the report and remembers to re-run post-deploy.
-            if ctx.environment not in spec.applicable_envs:
-                applicable = sorted(e.value for e in spec.applicable_envs)
+            applicable = ctx.environment in spec.applicable_envs
+            if not applicable:
+                # Skip the Running upsert/event entirely — operator sees N/A from the start.
+                applicable_list = sorted(e.value for e in spec.applicable_envs)
                 result = CheckResult(
                     status=Status.NA,
-                    summary=f"Not meaningful in {ctx.environment.value}; runs in {', '.join(applicable)}.",
+                    summary=f"Not meaningful in {ctx.environment.value}; runs in {', '.join(applicable_list)}.",
                     details={"skipped_reason": "environment_mismatch",
-                             "applicable_envs": applicable,
+                             "applicable_envs": applicable_list,
                              "current_env": ctx.environment.value},
                 )
+                runtime_ms = 0
             else:
+                await ch.publish(Event("check_running", {"check_id": spec.id}))
+                await asyncio.to_thread(
+                    store.upsert_check_result,
+                    run_id, spec.id, Status.RUNNING.value,
+                    "", {"title": spec.title, "severity": spec.severity.value},
+                    int(time.time() * 1000), None,
+                )
+                t0 = time.time()
                 try:
                     async with sem:
                         result = await asyncio.wait_for(spec.func(ctx), timeout=PER_CHECK_TIMEOUT_S)
@@ -220,10 +220,7 @@ class RunManager:
                         summary=f"Check raised an internal error ({type(exc).__name__}); see server logs.",
                         details={"error_type": type(exc).__name__},
                     )
-            runtime_ms = int((time.time() - t0) * 1000)
-            # Don't record env-gated NAs in ETA history — they take ~0 ms and would skew
-            # estimates for future runs in environments where the check actually executes.
-            if ctx.environment in spec.applicable_envs:
+                runtime_ms = int((time.time() - t0) * 1000)
                 await asyncio.to_thread(self.eta.record, spec.id, runtime_ms)
             details = dict(result.details)
             details.update({
