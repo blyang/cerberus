@@ -95,6 +95,9 @@ class CheckContext:
     site_config: Any  # cerberus.config.SiteConfig
     run_id: str = ""  # populated by the runner for evidence persistence (screenshots, etc.)
     environment: Env = Env.PRODUCTION
+    # A3 opt-in: ad-hoc callers (e.g. testing a 404/410 URL) can set this to
+    # assert a non-200 status. Default 200 reflects normal-page audits.
+    expected_status: int = 200
     cache: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     async def get_or_set(self, key: str, factory: Callable[[], Awaitable[Any]]) -> Any:

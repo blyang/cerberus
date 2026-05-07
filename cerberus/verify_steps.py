@@ -39,10 +39,9 @@ STEPS: dict[str, tuple[str, str]] = {
     ),
 
     "A3": (
-        "1. curl -o /dev/null -s -w '%{http_code}\\n' <url>\n"
-        "2. curl -o /dev/null -s -w '%{http_code}\\n' <nonexistent-url>",
-        "1. Returns 200 for live indexable pages (NOT 301 to homepage; that's a soft-404).\n"
-        "2. Returns 404 or 410 for removed/nonexistent URLs.",
+        "curl -o /dev/null -s -w '%{http_code}\\n' <url>",
+        "Returns 200 for live indexable pages (NOT 301 to homepage; that's a soft-404). "
+        "Removed/nonexistent URLs are F5's territory, not A3's.",
     ),
 
     "A4": (

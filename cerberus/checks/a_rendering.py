@@ -196,21 +196,21 @@ async def a2(ctx: CheckContext) -> CheckResult:
 @register("A3", section="A", severity=Severity.BLOCKING,
           title="Page returns the correct HTTP status", estimate_ms=2_000)
 async def a3(ctx: CheckContext) -> CheckResult:
+    expected = ctx.expected_status
     r = await fetch_url(ctx, ctx.url, follow_redirects=False)
     if r.error:
         return CheckResult(Status.FAIL, summary=f"Fetch error: {r.error}")
-    if r.status_code == 200:
-        return CheckResult(Status.PASS, summary="Returned 200.", details={"status": 200})
-    if r.status_code in (404, 410):
-        return CheckResult(Status.PASS, summary=f"Returned {r.status_code} (acceptable for nonexistent URL)",
-                           details={"status": r.status_code})
+    if r.status_code == expected:
+        return CheckResult(Status.PASS, summary=f"Returned {expected}.",
+                           details={"status": expected})
     if r.status_code in (301, 302, 307, 308):
         loc = r.headers.get("location", "")
         return CheckResult(Status.FAIL,
-                           summary=f"Returned {r.status_code} → {loc} (redirect, not a self-200).",
-                           details={"status": r.status_code, "location": loc})
-    return CheckResult(Status.FAIL, summary=f"Returned {r.status_code} (expected 200).",
-                       details={"status": r.status_code})
+                           summary=f"Returned {r.status_code} → {loc} (redirect, not a self-{expected}).",
+                           details={"status": r.status_code, "location": loc, "expected": expected})
+    return CheckResult(Status.FAIL,
+                       summary=f"Returned {r.status_code} (expected {expected}).",
+                       details={"status": r.status_code, "expected": expected})
 
 
 @register("A4", section="A", severity=Severity.BLOCKING,
