@@ -132,6 +132,7 @@ async def _build_cluster(ctx: CheckContext) -> dict:
                 continue
             seen.add(n)
             locale_targets.append(url)
+        truncated_locales = locale_targets[MAX_LOCALES:]
         locale_targets = locale_targets[:MAX_LOCALES]
 
         sem = asyncio.Semaphore(LOCALE_FETCH_CONCURRENCY)
@@ -175,6 +176,8 @@ async def _build_cluster(ctx: CheckContext) -> dict:
             "audited_url": ctx.url,
             "audited_alternates_normalized": _normalize_alt_set(alternates),
             "unsupported_dropped": unsupported_dropped,
+            "truncated_locales": truncated_locales,
+            "max_locales": MAX_LOCALES,
         }
 
     task = asyncio.ensure_future(factory())
@@ -257,6 +260,19 @@ async def g2(ctx: CheckContext) -> CheckResult:
 async def g3(ctx: CheckContext) -> CheckResult:
     cluster = await _build_cluster(ctx)
     if not cluster["alternates"]:
+        # If supported_languages filtered out every declared alternate, the page
+        # *does* declare a cluster — we just can't evaluate it under config. Surface
+        # that explicitly instead of reporting NA, which would hide the situation.
+        dropped_only = cluster.get("unsupported_dropped") or []
+        if dropped_only:
+            sample = ", ".join(f"{hl}→{u}" for hl, u in dropped_only[:3])
+            return CheckResult(
+                Status.NEEDS_REVIEW,
+                summary=f"{len(dropped_only)} declared hreflang alternate(s) all dropped by supported_languages filter — cluster not evaluated.",
+                details={"unsupported_dropped": dropped_only,
+                         "sample": sample,
+                         "advice": "If these locales are intentionally unsupported, mark this check Pass; otherwise add them to supported_languages in site_config.yaml."},
+            )
         return _no_cluster()
     audited_set = cluster["audited_alternates_normalized"]
     audited_url = ctx.url
@@ -309,10 +325,32 @@ async def g3(ctx: CheckContext) -> CheckResult:
             detail=f"bad: {bad_status[:3]}" if bad_status else f"{len(all_targets)} URLs all 200",
         ),
     ]
-    return CheckResult.from_substeps(
+    # Surface filter-dropped + MAX_LOCALES-truncated locales so reciprocity verdicts
+    # aren't trusted blindly when the evaluated set is smaller than what the page declares.
+    dropped = cluster.get("unsupported_dropped") or []
+    truncated = cluster.get("truncated_locales") or []
+    if dropped or truncated:
+        bits: list[str] = []
+        if dropped:
+            sample = ", ".join(f"{hl}→{u}" for hl, u in dropped[:3])
+            bits.append(f"{len(dropped)} dropped by supported_languages filter (e.g. {sample})")
+        if truncated:
+            bits.append(
+                f"{len(truncated)} truncated past MAX_LOCALES={cluster.get('max_locales', MAX_LOCALES)} "
+                f"(e.g. {', '.join(truncated[:3])})"
+            )
+        sub.append(SubStep(
+            "Full locale set evaluated",
+            Status.NEEDS_REVIEW,
+            detail="; ".join(bits),
+        ))
+    result = CheckResult.from_substeps(
         f"hreflang reciprocity ({len(cluster['per_locale'])} locale(s)).",
         sub,
     )
+    result.details["unsupported_dropped"] = dropped
+    result.details["truncated_locales"] = truncated
+    return result
 
 
 @register("G4", section="G", severity=Severity.RECOMMENDED,

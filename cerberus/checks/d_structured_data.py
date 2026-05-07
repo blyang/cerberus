@@ -35,6 +35,18 @@ def _extract_json_ld(html: str, url: str) -> list[dict[str, Any]]:
         return []
 
 
+def _count_json_ld_tags(soup) -> int:
+    """How many <script type='application/ld+json'> tags appear, regardless of validity.
+
+    Used to distinguish "page declares no JSON-LD at all" (NA) from "page declares
+    JSON-LD but extruct couldn't parse any of it" (NEEDS_REVIEW).
+    """
+    return len(soup.find_all(
+        "script",
+        attrs={"type": lambda v: isinstance(v, str) and "ld+json" in v.lower()},
+    ))
+
+
 def _parse_smv_response(body: str) -> dict[str, Any] | None:
     """Schema Markup Validator wraps its JSON in a `)]}'\\n` XSSI prefix; strip and parse."""
     text = body.lstrip()
@@ -91,6 +103,14 @@ async def d2(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     blocks = _extract_json_ld(r.text, ctx.url)
     if not blocks:
+        tag_count = _count_json_ld_tags(r.soup)
+        if tag_count:
+            return CheckResult(
+                Status.NEEDS_REVIEW,
+                summary=f"{tag_count} <script type='application/ld+json'> block(s) on page but extruct parsed zero — JSON-LD is malformed.",
+                details={"tag_count": tag_count,
+                         "advice": "Inspect the JSON-LD blocks for syntax errors (trailing commas, unescaped quotes, etc.)."},
+            )
         return CheckResult(Status.NA, summary="No JSON-LD on page.")
     # validator.schema.org is the Schema Markup Validator — full schema.org vocabulary check.
     # Different from Google's Rich Results Test (search.google.com/test/rich-results), which
@@ -158,6 +178,13 @@ async def d3(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     blocks = _extract_json_ld(r.text, ctx.url)
     if not blocks:
+        tag_count = _count_json_ld_tags(r.soup)
+        if tag_count:
+            return CheckResult(
+                Status.NEEDS_REVIEW,
+                summary=f"{tag_count} JSON-LD block(s) declared but unparseable; visible-content match cannot be evaluated.",
+                details={"tag_count": tag_count},
+            )
         return CheckResult(Status.NA, summary="No JSON-LD on page.")
     rendered = await browser.render_page(ctx.url)
     body_text = (rendered.get("text") or "")
