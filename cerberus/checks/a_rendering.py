@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -16,6 +17,24 @@ from .base import (
     SubStep,
     register,
 )
+
+def _line_present(line_cf: str, raw_cf: str) -> bool:
+    """Word-boundary aware containment check for A1.
+
+    Long lines (>=10 chars) keep substring containment — collisions are vanishingly
+    unlikely. Short lines use lookarounds so e.g. `EN` does not match inside `GENERAL`.
+    Lookarounds are `(?<!\\w)` / `(?!\\w)` (not `\\b`) so they also work for tokens
+    starting/ending with non-word chars like `$99` or `→`.
+    """
+    if len(line_cf) < 2:
+        return True
+    if not re.search(r"\w", line_cf):
+        return True
+    if len(line_cf) >= 10:
+        return line_cf in raw_cf
+    pattern = rf"(?<!\w){re.escape(line_cf)}(?!\w)"
+    return re.search(pattern, raw_cf) is not None
+
 
 A2_INSTRUCTION = (
     "Open the page in Chrome DevTools Performance panel. Enable Screenshots and set Network throttling "
@@ -51,7 +70,7 @@ async def a1(ctx: CheckContext) -> CheckResult:
                            summary=f"Headless render failed: {rendered.get('error') or 'empty content'}",
                            details={"render_error": rendered.get("error")})
 
-    rendered_lines = all_text_lines(rendered["text"], min_len=10)
+    rendered_lines = all_text_lines(rendered["text"], min_len=2)
     if not rendered_lines:
         return CheckResult(Status.FAIL,
                            summary="Rendered <main>/<article> is empty (no visible content)",
@@ -69,7 +88,7 @@ async def a1(ctx: CheckContext) -> CheckResult:
         collapsed = " ".join(line.replace("\xa0", " ").split())
         # CSS text-transform (uppercase/lowercase) makes innerText diverge from raw HTML;
         # entities are already decoded by BeautifulSoup's get_text.
-        if collapsed.casefold() in raw_visible_collapsed_cf:
+        if _line_present(collapsed.casefold(), raw_visible_collapsed_cf):
             continue
         missing.append(line)
 
