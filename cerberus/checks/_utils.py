@@ -253,6 +253,70 @@ def get_canonical_href(soup: BeautifulSoup) -> str | None:
     return str(href).strip() if href else None
 
 
+def get_title_text(soup: BeautifulSoup) -> str:
+    el = soup.find("title")
+    return el.get_text(strip=True) if el else ""
+
+
+def collect_static_paths(soup: BeautifulSoup, exts: tuple[str, ...]) -> set[str]:
+    """Return /-prefixed local paths from src/href attributes whose URL ends in `exts`.
+
+    Replaces the older ad-hoc regex that only matched double-quoted attributes.
+    Strips `?query` and `#fragment` so the returned path matches the regex's
+    behaviour. Extension match is case-insensitive.
+    """
+    paths: set[str] = set()
+    ext_lower = tuple("." + e.lower() for e in exts)
+    for el in soup.find_all(True):
+        for attr in ("src", "href"):
+            val = el.get(attr)
+            if not isinstance(val, str):
+                continue
+            v = val.strip()
+            if not v.startswith("/"):
+                continue
+            base = v.split("?", 1)[0].split("#", 1)[0]
+            if base.lower().endswith(ext_lower):
+                paths.add(base)
+    return paths
+
+
+_INSECURE_ATTRS_SIMPLE = ("src", "href", "poster", "action", "data-src")
+
+
+_CSS_URL_RE = re.compile(r"url\(\s*['\"]?(http://[^'\")\s]+)", re.I)
+
+
+def collect_insecure_urls(soup: BeautifulSoup) -> list[str]:
+    """Return absolute http:// URLs referenced by the page (mixed-content candidates).
+
+    Scans common URL-bearing attributes via BS4 (so single-quoted attributes are
+    no longer missed), srcset entries, plus CSS `url(...)` inside <style> blocks
+    and inline `style` attributes. The CSS scan is scoped to actual style
+    content (not the whole HTML) so that documentation or code samples
+    mentioning `url(http://...)` in body text don't trigger false failures.
+    """
+    found: list[str] = []
+    for el in soup.find_all(True):
+        for attr in _INSECURE_ATTRS_SIMPLE:
+            v = el.get(attr)
+            if isinstance(v, str) and v.strip().lower().startswith("http://"):
+                found.append(v.strip())
+        srcset = el.get("srcset")
+        if isinstance(srcset, str):
+            for entry in srcset.split(","):
+                tok = entry.strip().split(None, 1)[0] if entry.strip() else ""
+                if tok.lower().startswith("http://"):
+                    found.append(tok)
+        style_attr = el.get("style")
+        if isinstance(style_attr, str):
+            found.extend(m.group(1) for m in _CSS_URL_RE.finditer(style_attr))
+    for style_el in soup.find_all("style"):
+        css = style_el.get_text() or ""
+        found.extend(m.group(1) for m in _CSS_URL_RE.finditer(css))
+    return found
+
+
 def primary_content_text(html: str) -> str:
     """Best-effort extract of <main> or <article> innerText. Falls back to body."""
     soup = BeautifulSoup(html, "lxml")

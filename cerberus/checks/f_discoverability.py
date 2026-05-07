@@ -10,6 +10,7 @@ from protego import Protego
 from ._utils import (
     UA_CHROME_DESKTOP,
     UA_GOOGLEBOT,
+    collect_static_paths,
     fetch,
     fetch_url,
     normalize_url,
@@ -150,11 +151,12 @@ async def f3(ctx: CheckContext) -> CheckResult:
             detail=f"blocked for: {blocked}" if blocked else f"allowed for: {bots}",
         ),
     ]
-    # Static resources: collect /-prefixed src/href.
+    # Static resources: collect /-prefixed src/href via BS4 (so single-quoted
+    # attributes parse correctly).
     page = await fetch(ctx)
-    static_paths: set[str] = set()
-    for m in re.finditer(r'(?:src|href)="(/[^"#?]*\.(?:js|css|png|jpg|jpeg|webp|svg|gif))', page.text or ""):
-        static_paths.add(m.group(1))
+    static_paths = collect_static_paths(
+        page.soup, ("js", "css", "png", "jpg", "jpeg", "webp", "svg", "gif"),
+    )
     bot_for_static = "Googlebot"
     blocked_static = [p for p in static_paths if not rp.can_fetch(f"{urlparse(ctx.url).scheme}://{urlparse(ctx.url).hostname}{p}", bot_for_static)]
     sub.append(SubStep(

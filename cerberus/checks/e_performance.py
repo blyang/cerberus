@@ -5,7 +5,16 @@ import re
 
 from .. import browser, screenshots, vision
 from ..lighthouse import FIXTURE_KEY as LIGHTHOUSE_FIXTURE_KEY
-from ._utils import UA_CHROME_DESKTOP, UA_CHROME_MOBILE, fetch, fetch_url
+from ._utils import (
+    UA_CHROME_DESKTOP,
+    UA_CHROME_MOBILE,
+    collect_insecure_urls,
+    fetch,
+    fetch_url,
+    get_canonical_href,
+    get_meta,
+    get_title_text,
+)
 from .base import (
     CheckContext,
     CheckResult,
@@ -337,34 +346,34 @@ async def e6(ctx: CheckContext) -> CheckResult:
     if mobile.status_code != 200 or desktop.status_code != 200:
         return CheckResult(Status.FAIL, summary=f"mobile={mobile.status_code} desktop={desktop.status_code}")
     sub: list[SubStep] = []
-    # title / desc / canonical
-    def head_dump(html: str) -> dict[str, str]:
-        m = re.search(r"<title[^>]*>([^<]*)</title>", html, re.I)
-        title = (m.group(1).strip() if m else "")
-        m2 = re.search(r'<meta[^>]+name="description"[^>]+content="([^"]*)"', html, re.I)
-        desc = (m2.group(1).strip() if m2 else "")
-        m3 = re.search(r'<link[^>]+rel="canonical"[^>]+href="([^"]*)"', html, re.I)
-        can = (m3.group(1).strip() if m3 else "")
-        return {"title": title, "description": desc, "canonical": can}
-    h_m, h_d = head_dump(mobile.text), head_dump(desktop.text)
+    # title / desc / canonical — BS4-based so single-quoted attributes parse.
+    mobile_soup = mobile.soup
+    desktop_soup = desktop.soup
+
+    def head_dump(soup) -> dict[str, str]:
+        return {
+            "title": get_title_text(soup),
+            "description": (get_meta(soup, name="description") or ""),
+            "canonical": (get_canonical_href(soup) or ""),
+        }
+    h_m, h_d = head_dump(mobile_soup), head_dump(desktop_soup)
     sub.append(SubStep(
         "title/description/canonical match",
         Status.PASS if h_m == h_d else Status.FAIL,
         detail=f"mobile={h_m} desktop={h_d}",
     ))
     # Robots directives
-    def robots(html: str) -> str:
-        m = re.search(r'<meta[^>]+name="robots"[^>]+content="([^"]*)"', html, re.I)
-        return (m.group(1).strip().lower() if m else "")
+    def robots(soup) -> str:
+        return (get_meta(soup, name="robots") or "").lower()
     sub.append(SubStep(
         "robots directives match",
-        Status.PASS if robots(mobile.text) == robots(desktop.text) else Status.FAIL,
-        detail=f"mobile={robots(mobile.text)!r} desktop={robots(desktop.text)!r}",
+        Status.PASS if robots(mobile_soup) == robots(desktop_soup) else Status.FAIL,
+        detail=f"mobile={robots(mobile_soup)!r} desktop={robots(desktop_soup)!r}",
     ))
     # Internal hrefs (sets, ignore order)
-    def hrefs(html: str) -> set[str]:
-        return set(re.findall(r'<a [^>]*href="([^"]*)"', html))
-    diff = hrefs(mobile.text) ^ hrefs(desktop.text)
+    def hrefs(soup) -> set[str]:
+        return {(a.get("href") or "").strip() for a in soup.find_all("a", href=True)}
+    diff = hrefs(mobile_soup) ^ hrefs(desktop_soup)
     sub.append(SubStep(
         "internal <a href> set is identical",
         Status.PASS if not diff else Status.FAIL,
@@ -379,8 +388,9 @@ async def e7(ctx: CheckContext) -> CheckResult:
     if not ctx.url.startswith("https://"):
         return CheckResult(Status.FAIL, summary="URL does not use https.")
     r = await fetch(ctx)
-    # Find http:// references in src/href.
-    insecure = re.findall(r'(?:src|href)="(http://[^"]+)"', r.text)
+    # BS4-based scan covers single-quoted attrs and widens beyond src/href to
+    # srcset, poster, action, data-src, plus a regex pass for CSS url(...).
+    insecure = collect_insecure_urls(r.soup)
     if insecure:
         return CheckResult(Status.FAIL,
                            summary=f"{len(insecure)} insecure http:// reference(s) on page.",
