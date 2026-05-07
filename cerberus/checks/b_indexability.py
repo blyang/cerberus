@@ -80,7 +80,17 @@ async def b4(ctx: CheckContext) -> CheckResult:
     href = get_canonical_href(r.soup)
     if not href:
         return CheckResult(Status.NA, summary="No canonical tag (B3 will fail).")
-    target = await fetch_url(ctx, href)
+    # First fetch without following redirects: a canonical that 301s elsewhere
+    # is by definition unstable, even if the eventual destination is 200/healthy.
+    target = await fetch_url(ctx, href, follow_redirects=False)
+    if target.status_code in (301, 302, 307, 308):
+        loc = target.headers.get("location", "")
+        return CheckResult(
+            Status.FAIL,
+            summary=f"Canonical href {href} redirects ({target.status_code} → {loc}); target is not stable.",
+            details={"canonical_href": href, "redirect_to": loc, "status": target.status_code,
+                     "advice": "Set canonical to the final, non-redirecting URL."},
+        )
     sub: list[SubStep] = []
     sub.append(SubStep("Canonical target returns 200", Status.PASS if target.status_code == 200 else Status.FAIL,
                        detail=f"status: {target.status_code} {target.error or ''}".strip()))
@@ -98,6 +108,34 @@ async def b4(ctx: CheckContext) -> CheckResult:
     return CheckResult.from_substeps(f"Canonical target health: {href}", sub)
 
 
+def _redirect_matches(headers: dict, request_url: str, expected_url: str) -> bool:
+    """True if the Location header (resolved against `request_url`) normalizes to `expected_url`.
+
+    Used by B5/B6 to assert that variant URLs redirect to the right preferred URL,
+    not just to *some* URL with a 301 status.
+    """
+    loc = (headers.get("location") or "").strip()
+    if not loc:
+        return False
+    abs_loc = urljoin(request_url, loc)
+    return normalize_url(abs_loc) == normalize_url(expected_url)
+
+
+def _variant_redirect_status(request_url: str, headers: dict, status_code: int, expected_url: str) -> tuple[Status, str]:
+    """Verdict for a host-normalization redirect. 302/307 stay Needs Review; 301/308
+    must additionally point at `expected_url` to count as Pass.
+    """
+    loc = headers.get("location", "")
+    detail = f"status={status_code} loc={loc!r} expected={expected_url!r}"
+    if status_code in (301, 308):
+        if _redirect_matches(headers, request_url, expected_url):
+            return Status.PASS, detail
+        return Status.FAIL, detail + " (Location does not match expected preferred URL)"
+    if status_code in (302, 307):
+        return Status.NEEDS_REVIEW, detail + " (302/307 — should be 301 for permanent host normalization)"
+    return Status.FAIL, detail
+
+
 @register("B5", section="B", severity=Severity.BLOCKING,
           title="Duplicate URL variants consolidate cleanly", estimate_ms=8_000)
 async def b5(ctx: CheckContext) -> CheckResult:
@@ -105,6 +143,7 @@ async def b5(ctx: CheckContext) -> CheckResult:
     host = (p.hostname or "").lower()
     apex = host[4:] if host.startswith("www.") else host
     canonical_url = ctx.url
+    expected_preferred = f"{p.scheme}://{host}{p.path}"
     sub: list[SubStep] = []
 
     # 1. UTM variant returns 200 with same canonical.
@@ -120,20 +159,14 @@ async def b5(ctx: CheckContext) -> CheckResult:
     if p.scheme == "https":
         http_variant = "http://" + host + p.path + (("?" + p.query) if p.query else "")
         hr = await fetch_url(ctx, http_variant, follow_redirects=False)
-        sub.append(SubStep(
-            "http:// variant 301s to https://",
-            Status.PASS if hr.status_code in (301, 308) else (Status.NEEDS_REVIEW if hr.status_code in (302, 307) else Status.FAIL),
-            detail=f"status={hr.status_code} loc={hr.headers.get('location','')!r}",
-        ))
+        status, detail = _variant_redirect_status(http_variant, hr.headers, hr.status_code, expected_preferred)
+        sub.append(SubStep("http:// variant 301s to expected https:// URL", status, detail=detail))
     # 3. apex variant 301s to www.
     if apex != host and host.startswith("www."):
         apex_variant = f"{p.scheme}://{apex}{p.path}"
         ar = await fetch_url(ctx, apex_variant, follow_redirects=False)
-        sub.append(SubStep(
-            "apex 301s to www",
-            Status.PASS if ar.status_code in (301, 308) else (Status.NEEDS_REVIEW if ar.status_code in (302, 307) else Status.FAIL),
-            detail=f"status={ar.status_code} loc={ar.headers.get('location','')!r}",
-        ))
+        status, detail = _variant_redirect_status(apex_variant, ar.headers, ar.status_code, expected_preferred)
+        sub.append(SubStep("apex variant 301s to expected www URL", status, detail=detail))
     return CheckResult.from_substeps("Duplicate URL variant consolidation.", sub)
 
 
@@ -152,11 +185,11 @@ async def b6(ctx: CheckContext) -> CheckResult:
     r1 = await fetch_url(ctx, apex_https, follow_redirects=False)
     r2 = await fetch_url(ctx, apex_http, follow_redirects=False)
     expected_loc = f"{p.scheme}://{host}{p.path}"
+    s1, d1 = _variant_redirect_status(apex_https, r1.headers, r1.status_code, expected_loc)
+    s2, d2 = _variant_redirect_status(apex_http, r2.headers, r2.status_code, expected_loc)
     sub = [
-        SubStep("https://apex 301→https://www", Status.PASS if r1.status_code in (301, 308) and (r1.headers.get("location", "").rstrip("/") == expected_loc.rstrip("/")) else Status.FAIL,
-                detail=f"status={r1.status_code} loc={r1.headers.get('location','')!r}"),
-        SubStep("http://apex 301→https://www", Status.PASS if r2.status_code in (301, 308) else Status.FAIL,
-                detail=f"status={r2.status_code} loc={r2.headers.get('location','')!r}"),
+        SubStep("https://apex 301→https://www (expected URL)", s1, detail=d1),
+        SubStep("http://apex 301→https://www (expected URL)", s2, detail=d2),
     ]
     return CheckResult.from_substeps("Apex→www normalization.", sub)
 
