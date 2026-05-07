@@ -274,6 +274,17 @@ async def g3(ctx: CheckContext) -> CheckResult:
                          "advice": "If these locales are intentionally unsupported, mark this check Pass; otherwise add them to supported_languages in site_config.yaml."},
             )
         return _no_cluster()
+    # Alternates declared but no locale was actually fetched — reciprocity substeps
+    # below would pass vacuously (zero counter-examples ≠ all-good). Causes: every
+    # locale fetch hit an SSRF guard or network error, or the only alternate was
+    # `x-default` (skipped from locale_targets). Surface as Needs Review instead.
+    if not cluster["per_locale"]:
+        return CheckResult(
+            Status.NEEDS_REVIEW,
+            summary=f"{len(cluster['alternates'])} hreflang alternate(s) declared but no locale was successfully fetched — reciprocity not evaluated.",
+            details={"alternates": [(hl, u) for hl, u in cluster["alternates"]],
+                     "advice": "Either every locale URL failed to fetch (network/SSRF) or the only alternate is x-default. Inspect the alternates list and rerun."},
+        )
     audited_set = cluster["audited_alternates_normalized"]
     audited_url = ctx.url
     # Audited page must self-reference in its own hreflang.

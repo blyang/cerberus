@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
 
 from protego import Protego
@@ -249,11 +249,21 @@ F8_SAMPLE_CAP = 50
 async def f8(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     host = (urlparse(ctx.url).hostname or "").lower()
-    raw_internal: list[str] = []
+    # Resolve every href to absolute via urljoin (handles `/path`, `//other-host/x`,
+    # and full URLs uniformly), then keep only those whose resolved host matches
+    # the audited host. Without urljoin, a protocol-relative `//cdn.example.com/x`
+    # would slip through `href.startswith('/')` as "internal" and the naive
+    # absolute construction would produce malformed `https://audited//cdn/...`.
+    raw_internal: list[tuple[str, str]] = []
     for a in r.soup.find_all("a", href=True):
         href = a["href"].strip()
-        if href.startswith("/") or (host in href):
-            raw_internal.append(href)
+        if not href or href.startswith(("javascript:", "mailto:", "tel:", "#")):
+            continue
+        absolute = urljoin(ctx.url, href)
+        abs_host = (urlparse(absolute).hostname or "").lower()
+        if abs_host != host:
+            continue
+        raw_internal.append((href, absolute))
     if not raw_internal:
         return CheckResult(Status.NA, summary="No internal <a href> on page.")
     # Dedup by absolute URL with query+fragment intact so the sample isn't filled
@@ -261,22 +271,20 @@ async def f8(ctx: CheckContext) -> CheckResult:
     # `/pricing` stay distinct, since the tracking-param check below depends on
     # both surviving the dedup.
     seen: set[str] = set()
-    deduped: list[str] = []
-    for href in raw_internal:
-        absolute = href if href.startswith("http") else f"{urlparse(ctx.url).scheme}://{host}{href}"
+    deduped: list[tuple[str, str]] = []
+    for href, absolute in raw_internal:
         if absolute in seen:
             continue
         seen.add(absolute)
-        deduped.append(href)
+        deduped.append((href, absolute))
     sample = deduped[:F8_SAMPLE_CAP]
     unchecked = max(0, len(deduped) - len(sample))
 
     bad_redirects: list[str] = []
     tracked: list[str] = []
-    for href in sample:
+    for href, absolute in sample:
         if "?" in href and re.search(r"\?(utm_|sid=|session=|ref=)", href, re.I):
             tracked.append(href)
-        absolute = href if href.startswith("http") else f"{urlparse(ctx.url).scheme}://{host}{href}"
         head = await fetch_url(ctx, absolute, method="HEAD", follow_redirects=False)
         if head.status_code in (301, 302, 307, 308):
             bad_redirects.append(f"{absolute} → {head.headers.get('location','')!r}")
