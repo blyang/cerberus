@@ -8,7 +8,7 @@ import extruct
 import httpx
 
 from .. import browser
-from ._utils import fetch, normalize_url
+from ._utils import DEFAULT_TIMEOUT, fetch, normalize_url
 from .base import (
     CheckContext,
     CheckResult,
@@ -22,6 +22,9 @@ D3_MANUAL_INSTRUCTION = (
     "Review the JSON-LD blocks shown in the check details. Confirm no free-text field "
     "(description, name, etc.) makes claims that contradict what visitors see on the page."
 )
+
+SMV_URL = "https://validator.schema.org/validate"
+SMV_TOOL_ID = "validator.schema.org"
 
 
 def _extract_json_ld(html: str, url: str) -> list[dict[str, Any]]:
@@ -44,32 +47,41 @@ def _parse_smv_response(body: str) -> dict[str, Any] | None:
 
 
 def _collect_smv_errors(payload: dict[str, Any]) -> list[str]:
-    """Walk the SMV response and surface every error/warning description.
+    """Surface error descriptions from the SMV response.
 
-    Response shape (as of 2026): {tripleGroups: [{nodes: [{types: [{errors:[]}],
-    properties: [{errors:[]}], nodeProperties: [{target: {...recursive}, errors:[]}],
-    errors: []}]}], numErrors, numWarnings}.
+    Walks only the documented path so unrelated `errors` keys elsewhere in the payload
+    can't leak through: tripleGroups[].nodes[].{types,properties,nodeProperties,errors}.
+    `nodeProperties[].target` is itself a node, so recurse.
     """
     out: list[str] = []
 
-    def walk(obj: Any) -> None:
-        if isinstance(obj, list):
-            for o in obj:
-                walk(o)
+    def add(errors: Any) -> None:
+        if not isinstance(errors, list):
             return
-        if not isinstance(obj, dict):
-            return
-        for e in obj.get("errors") or []:
+        for e in errors:
             if isinstance(e, dict):
-                msg = e.get("description") or e.get("message") or json.dumps(e)
-                out.append(str(msg))
+                out.append(str(e.get("description") or e.get("message") or json.dumps(e)))
             elif e:
                 out.append(str(e))
-        for v in obj.values():
-            if isinstance(v, (list, dict)):
-                walk(v)
 
-    walk(payload)
+    def visit_node(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        add(node.get("errors"))
+        for sub in node.get("types") or []:
+            if isinstance(sub, dict):
+                add(sub.get("errors"))
+        for sub in node.get("properties") or []:
+            if isinstance(sub, dict):
+                add(sub.get("errors"))
+        for sub in node.get("nodeProperties") or []:
+            if isinstance(sub, dict):
+                add(sub.get("errors"))
+                visit_node(sub.get("target"))
+
+    for group in payload.get("tripleGroups") or []:
+        for node in (group.get("nodes") if isinstance(group, dict) else None) or []:
+            visit_node(node)
     return out
 
 
@@ -85,9 +97,9 @@ async def d2(ctx: CheckContext) -> CheckResult:
     # only checks eligibility for specific Google rich-result types. Operators sometimes confuse
     # them; surface the distinction explicitly in the result.
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(
-                "https://validator.schema.org/validate",
+                SMV_URL,
                 data={"url": ctx.url},
                 headers={"Accept": "application/json"},
             )
@@ -97,7 +109,7 @@ async def d2(ctx: CheckContext) -> CheckResult:
             summary=f"Schema Markup Validator unreachable ({type(exc).__name__}); JSON-LD parses locally.",
             details={"block_count": len(blocks),
                      "validator_error": f"{type(exc).__name__}: {exc}",
-                     "tool": "validator.schema.org"},
+                     "tool": SMV_TOOL_ID},
         )
     if resp.status_code != 200:
         return CheckResult(
@@ -105,7 +117,7 @@ async def d2(ctx: CheckContext) -> CheckResult:
             summary=f"Schema Markup Validator returned HTTP {resp.status_code}; JSON-LD parses locally.",
             details={"block_count": len(blocks),
                      "validator_status": resp.status_code,
-                     "tool": "validator.schema.org"},
+                     "tool": SMV_TOOL_ID},
         )
     payload = _parse_smv_response(resp.text)
     if payload is None:
@@ -114,18 +126,18 @@ async def d2(ctx: CheckContext) -> CheckResult:
             summary="Schema Markup Validator returned unparseable JSON; JSON-LD parses locally.",
             details={"block_count": len(blocks),
                      "validator_body_prefix": resp.text[:200],
-                     "tool": "validator.schema.org"},
+                     "tool": SMV_TOOL_ID},
         )
     num_errors = int(payload.get("numErrors") or 0)
     num_warnings = int(payload.get("numWarnings") or 0)
-    errors = _collect_smv_errors(payload) if num_errors else []
     if num_errors:
         return CheckResult(
             Status.FAIL,
             summary=f"{num_errors} schema.org error(s) across {len(blocks)} block(s).",
-            details={"errors": errors[:20], "block_count": len(blocks),
+            details={"errors": _collect_smv_errors(payload)[:20],
+                     "block_count": len(blocks),
                      "num_warnings": num_warnings,
-                     "tool": "validator.schema.org",
+                     "tool": SMV_TOOL_ID,
                      "note": "Different tool from Google Rich Results Test; an RRT pass doesn't override SMV errors."},
         )
     summary = f"{len(blocks)} JSON-LD block(s) validated (0 errors"
