@@ -32,15 +32,58 @@ def _extract_json_ld(html: str, url: str) -> list[dict[str, Any]]:
         return []
 
 
+def _parse_smv_response(body: str) -> dict[str, Any] | None:
+    """Schema Markup Validator wraps its JSON in a `)]}'\\n` XSSI prefix; strip and parse."""
+    text = body.lstrip()
+    if text.startswith(")]}'"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[4:]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _collect_smv_errors(payload: dict[str, Any]) -> list[str]:
+    """Walk the SMV response and surface every error/warning description.
+
+    Response shape (as of 2026): {tripleGroups: [{nodes: [{types: [{errors:[]}],
+    properties: [{errors:[]}], nodeProperties: [{target: {...recursive}, errors:[]}],
+    errors: []}]}], numErrors, numWarnings}.
+    """
+    out: list[str] = []
+
+    def walk(obj: Any) -> None:
+        if isinstance(obj, list):
+            for o in obj:
+                walk(o)
+            return
+        if not isinstance(obj, dict):
+            return
+        for e in obj.get("errors") or []:
+            if isinstance(e, dict):
+                msg = e.get("description") or e.get("message") or json.dumps(e)
+                out.append(str(msg))
+            elif e:
+                out.append(str(e))
+        for v in obj.values():
+            if isinstance(v, (list, dict)):
+                walk(v)
+
+    walk(payload)
+    return out
+
+
 @register("D2", section="D", severity=Severity.CONDITIONAL,
-          title="Structured data validates", estimate_ms=8_000)
+          title="Structured data validates (Schema Markup Validator)", estimate_ms=8_000)
 async def d2(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     blocks = _extract_json_ld(r.text, ctx.url)
     if not blocks:
         return CheckResult(Status.NA, summary="No JSON-LD on page.")
-    # Hit Google's rich-results-style validator endpoint (validator.schema.org).
-    errors: list[str] = []
+    # validator.schema.org is the Schema Markup Validator — full schema.org vocabulary check.
+    # Different from Google's Rich Results Test (search.google.com/test/rich-results), which
+    # only checks eligibility for specific Google rich-result types. Operators sometimes confuse
+    # them; surface the distinction explicitly in the result.
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
@@ -48,27 +91,53 @@ async def d2(ctx: CheckContext) -> CheckResult:
                 data={"url": ctx.url},
                 headers={"Accept": "application/json"},
             )
-        if resp.status_code == 200:
-            try:
-                payload = resp.json()
-                # Schema.org returns nested groups; surface any error counts.
-                groups = payload.get("groups", []) if isinstance(payload, dict) else []
-                for g in groups:
-                    for n in (g.get("nodes") or []):
-                        for e in (n.get("errors") or []):
-                            errors.append(str(e.get("description") or e))
-            except json.JSONDecodeError:
-                errors.append(f"validator returned non-JSON (status {resp.status_code})")
-        else:
-            errors.append(f"validator HTTP {resp.status_code}")
     except Exception as exc:
-        errors.append(f"validator unreachable: {type(exc).__name__}: {exc}")
-    if errors:
-        return CheckResult(Status.FAIL,
-                           summary=f"{len(errors)} validation error(s).",
-                           details={"errors": errors[:20], "block_count": len(blocks)})
-    return CheckResult(Status.PASS, summary=f"{len(blocks)} JSON-LD block(s) validated.",
-                       details={"block_count": len(blocks)})
+        return CheckResult(
+            Status.NEEDS_REVIEW,
+            summary=f"Schema Markup Validator unreachable ({type(exc).__name__}); JSON-LD parses locally.",
+            details={"block_count": len(blocks),
+                     "validator_error": f"{type(exc).__name__}: {exc}",
+                     "tool": "validator.schema.org"},
+        )
+    if resp.status_code != 200:
+        return CheckResult(
+            Status.NEEDS_REVIEW,
+            summary=f"Schema Markup Validator returned HTTP {resp.status_code}; JSON-LD parses locally.",
+            details={"block_count": len(blocks),
+                     "validator_status": resp.status_code,
+                     "tool": "validator.schema.org"},
+        )
+    payload = _parse_smv_response(resp.text)
+    if payload is None:
+        return CheckResult(
+            Status.NEEDS_REVIEW,
+            summary="Schema Markup Validator returned unparseable JSON; JSON-LD parses locally.",
+            details={"block_count": len(blocks),
+                     "validator_body_prefix": resp.text[:200],
+                     "tool": "validator.schema.org"},
+        )
+    num_errors = int(payload.get("numErrors") or 0)
+    num_warnings = int(payload.get("numWarnings") or 0)
+    errors = _collect_smv_errors(payload) if num_errors else []
+    if num_errors:
+        return CheckResult(
+            Status.FAIL,
+            summary=f"{num_errors} schema.org error(s) across {len(blocks)} block(s).",
+            details={"errors": errors[:20], "block_count": len(blocks),
+                     "num_warnings": num_warnings,
+                     "tool": "validator.schema.org",
+                     "note": "Different tool from Google Rich Results Test; an RRT pass doesn't override SMV errors."},
+        )
+    summary = f"{len(blocks)} JSON-LD block(s) validated (0 errors"
+    if num_warnings:
+        summary += f", {num_warnings} warnings"
+    summary += ")."
+    return CheckResult(
+        Status.PASS,
+        summary=summary,
+        details={"block_count": len(blocks), "num_warnings": num_warnings,
+                 "tool": "validator.schema.org"},
+    )
 
 
 @register("D3", section="D", severity=Severity.CONDITIONAL,
