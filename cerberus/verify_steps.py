@@ -241,10 +241,13 @@ STEPS: dict[str, tuple[str, str]] = {
         "Run PSI against <url>; check mobile + desktop INP; read CrUX field data if available.",
         "Lab INP < 200ms on both mobile and desktop. If field data exists, p75 INP < 200ms.",
     ),
-    "E3a": (
-        "Run PSI against <url>; check Performance and SEO scores on mobile + desktop.",
-        "Performance ≥ 0.90 and SEO ≥ 0.90 on both mobile and desktop.\n"
-        "Accessibility and Best Practices ≥ 0.90 where possible (target, not blocking).",
+    "E3a-perf": (
+        "Run PSI against <url>; check Performance score on mobile + desktop.",
+        "Performance ≥ 0.90 on both mobile and desktop.",
+    ),
+    "E3a-seo": (
+        "Run PSI against <url>; check SEO score on mobile + desktop.",
+        "SEO ≥ 0.90 on both mobile and desktop.",
     ),
     "E3b": (
         "Open <url> in Chrome incognito → DevTools → Lighthouse → Accessibility + Best Practices,\n"
