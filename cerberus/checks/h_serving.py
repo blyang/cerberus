@@ -87,7 +87,11 @@ async def h2(ctx: CheckContext) -> CheckResult:
     # Match scopes: rendered comes from Playwright's `main, article || body` innerText,
     # so reduce raw HTML to the same region before extracting text. Without this, raw includes
     # nav/footer/scripts and similarity tanks even on identical primary content.
-    raw_text = html_to_text(_extract_main(raw.text or ""))
+    # Fallback: if scoping yields empty text (e.g. <main> exists but is an empty SSR placeholder
+    # while real content lives elsewhere in <body>), use the full document so we don't compare
+    # an empty raw against a full rendered body.
+    raw_main = html_to_text(_extract_main(raw.text or ""))
+    raw_text = raw_main if raw_main.strip() else html_to_text(raw.text or "")
     rendered_text = rendered.get("text") or html_to_text(rendered.get("html") or "")
     raw_norm = _normalize_for_compare(raw_text)
     rendered_norm = _normalize_for_compare(rendered_text)
