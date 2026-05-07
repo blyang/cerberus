@@ -241,6 +241,12 @@ STEPS: dict[str, tuple[str, str]] = {
         "Run PSI against <url>; check mobile + desktop INP; read CrUX field data if available.",
         "Lab INP < 200ms on both mobile and desktop. If field data exists, p75 INP < 200ms.",
     ),
+    # Backwards-compat: rows from before the E3a split (combined Perf+SEO check) still
+    # carry check_id="E3a"; keep this entry so historical /report.md renders correctly.
+    "E3a": (
+        "Run PSI against <url>; check Performance and SEO scores on mobile + desktop.",
+        "Performance ≥ 0.90 and SEO ≥ 0.90 on both mobile and desktop.",
+    ),
     "E3a-perf": (
         "Run PSI against <url>; check Performance score on mobile + desktop.",
         "Performance ≥ 0.90 on both mobile and desktop.",
