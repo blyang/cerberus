@@ -121,17 +121,18 @@ def _redirect_matches(headers: dict, request_url: str, expected_url: str) -> boo
     return normalize_url(abs_loc) == normalize_url(expected_url)
 
 
-def _variant_redirect_status(request_url: str, headers: dict, status_code: int, expected_url: str) -> tuple[Status, str]:
+def _variant_redirect_status(request_url: str, fetch_result, expected_url: str) -> tuple[Status, str]:
     """Verdict for a host-normalization redirect. 302/307 stay Needs Review; 301/308
     must additionally point at `expected_url` to count as Pass.
     """
-    loc = headers.get("location", "")
-    detail = f"status={status_code} loc={loc!r} expected={expected_url!r}"
-    if status_code in (301, 308):
-        if _redirect_matches(headers, request_url, expected_url):
+    loc = fetch_result.headers.get("location", "")
+    sc = fetch_result.status_code
+    detail = f"status={sc} loc={loc!r} expected={expected_url!r}"
+    if sc in (301, 308):
+        if _redirect_matches(fetch_result.headers, request_url, expected_url):
             return Status.PASS, detail
         return Status.FAIL, detail + " (Location does not match expected preferred URL)"
-    if status_code in (302, 307):
+    if sc in (302, 307):
         return Status.NEEDS_REVIEW, detail + " (302/307 — should be 301 for permanent host normalization)"
     return Status.FAIL, detail
 
@@ -159,13 +160,13 @@ async def b5(ctx: CheckContext) -> CheckResult:
     if p.scheme == "https":
         http_variant = "http://" + host + p.path + (("?" + p.query) if p.query else "")
         hr = await fetch_url(ctx, http_variant, follow_redirects=False)
-        status, detail = _variant_redirect_status(http_variant, hr.headers, hr.status_code, expected_preferred)
+        status, detail = _variant_redirect_status(http_variant, hr, expected_preferred)
         sub.append(SubStep("http:// variant 301s to expected https:// URL", status, detail=detail))
     # 3. apex variant 301s to www.
     if apex != host and host.startswith("www."):
         apex_variant = f"{p.scheme}://{apex}{p.path}"
         ar = await fetch_url(ctx, apex_variant, follow_redirects=False)
-        status, detail = _variant_redirect_status(apex_variant, ar.headers, ar.status_code, expected_preferred)
+        status, detail = _variant_redirect_status(apex_variant, ar, expected_preferred)
         sub.append(SubStep("apex variant 301s to expected www URL", status, detail=detail))
     return CheckResult.from_substeps("Duplicate URL variant consolidation.", sub)
 
@@ -185,8 +186,8 @@ async def b6(ctx: CheckContext) -> CheckResult:
     r1 = await fetch_url(ctx, apex_https, follow_redirects=False)
     r2 = await fetch_url(ctx, apex_http, follow_redirects=False)
     expected_loc = f"{p.scheme}://{host}{p.path}"
-    s1, d1 = _variant_redirect_status(apex_https, r1.headers, r1.status_code, expected_loc)
-    s2, d2 = _variant_redirect_status(apex_http, r2.headers, r2.status_code, expected_loc)
+    s1, d1 = _variant_redirect_status(apex_https, r1, expected_loc)
+    s2, d2 = _variant_redirect_status(apex_http, r2, expected_loc)
     sub = [
         SubStep("https://apex 301→https://www (expected URL)", s1, detail=d1),
         SubStep("http://apex 301→https://www (expected URL)", s2, detail=d2),

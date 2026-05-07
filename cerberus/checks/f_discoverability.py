@@ -1,6 +1,7 @@
 """F — Discoverability, Crawling & Access."""
 from __future__ import annotations
 
+import asyncio
 import re
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
@@ -242,6 +243,8 @@ async def f7(ctx: CheckContext) -> CheckResult:
 
 
 F8_SAMPLE_CAP = 50
+F8_HEAD_CONCURRENCY = 6
+_F8_TRACKING_RE = re.compile(r"\?(utm_|sid=|session=|ref=)", re.I)
 
 
 @register("F8", section="F", severity=Severity.RECOMMENDED,
@@ -280,25 +283,26 @@ async def f8(ctx: CheckContext) -> CheckResult:
     sample = deduped[:F8_SAMPLE_CAP]
     unchecked = max(0, len(deduped) - len(sample))
 
-    bad_redirects: list[str] = []
-    tracked: list[str] = []
-    for href, absolute in sample:
-        if "?" in href and re.search(r"\?(utm_|sid=|session=|ref=)", href, re.I):
-            tracked.append(href)
-        head = await fetch_url(ctx, absolute, method="HEAD", follow_redirects=False)
+    tracked = [href for href, _ in sample if _F8_TRACKING_RE.search(href)]
+    # Concurrent HEADs — sequentially this loop dominated F8's runtime budget.
+    sem = asyncio.Semaphore(F8_HEAD_CONCURRENCY)
+
+    async def _check_one(absolute: str) -> str | None:
+        async with sem:
+            head = await fetch_url(ctx, absolute, method="HEAD", follow_redirects=False)
         if head.status_code in (301, 302, 307, 308):
-            bad_redirects.append(f"{absolute} → {head.headers.get('location','')!r}")
-    coverage = (
-        f"checked {len(sample)} of {len(deduped)} unique internal link(s)"
-        + (f" — {unchecked} unchecked past cap of {F8_SAMPLE_CAP}" if unchecked else "")
-    )
+            return f"{absolute} → {head.headers.get('location','')!r}"
+        return None
+
+    redirect_results = await asyncio.gather(*(_check_one(absolute) for _, absolute in sample))
+    bad_redirects = [r for r in redirect_results if r]
     sub = [
         SubStep("No internal links go through redirects",
                 Status.PASS if not bad_redirects else Status.FAIL,
-                detail=(f"sample: {bad_redirects[:3]}; {coverage}" if bad_redirects else coverage)),
+                detail=f"sample: {bad_redirects[:3]}" if bad_redirects else "no redirects in sample"),
         SubStep("No tracking params in internal links",
                 Status.PASS if not tracked else Status.FAIL,
-                detail=(f"sample: {tracked[:3]}; {coverage}" if tracked else coverage)),
+                detail=f"sample: {tracked[:3]}" if tracked else "no tracking params in sample"),
         # All-links coverage: Pass-on-sample without flagging the unchecked tail
         # would let a redirecting or tracked link at position 51+ slip through,
         # even though everything below the cap is clean.

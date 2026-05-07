@@ -177,7 +177,6 @@ async def _build_cluster(ctx: CheckContext) -> dict:
             "audited_alternates_normalized": _normalize_alt_set(alternates),
             "unsupported_dropped": unsupported_dropped,
             "truncated_locales": truncated_locales,
-            "max_locales": MAX_LOCALES,
         }
 
     task = asyncio.ensure_future(factory())
@@ -347,7 +346,7 @@ async def g3(ctx: CheckContext) -> CheckResult:
             bits.append(f"{len(dropped)} dropped by supported_languages filter (e.g. {sample})")
         if truncated:
             bits.append(
-                f"{len(truncated)} truncated past MAX_LOCALES={cluster.get('max_locales', MAX_LOCALES)} "
+                f"{len(truncated)} truncated past MAX_LOCALES={MAX_LOCALES} "
                 f"(e.g. {', '.join(truncated[:3])})"
             )
         sub.append(SubStep(
