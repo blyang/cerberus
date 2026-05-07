@@ -77,3 +77,26 @@ cap, MAX_LOCALES=30 truncation tail, extruct silently dropping malformed
 JSON-LD blocks. Surface the dropped/truncated/unchecked count as a Needs-
 Review sub-step when non-zero. If the entire set was filtered out, escalate
 to NEEDS_REVIEW — don't fall through to NA, that hides the gap.
+
+## `from_substeps` promotes MANUAL → NEEDS_REVIEW
+
+`CheckResult.from_substeps()` resolves `Status.MANUAL` sub-steps to
+`Status.NEEDS_REVIEW` on the parent result. So after calling it,
+`result.status == Status.MANUAL` is **always False**. To conditionally
+set `result.instruction`, check the sub-steps directly:
+
+```python
+if any(s.status == Status.MANUAL for s in sub):
+    result.instruction = MY_MANUAL_INSTRUCTION
+```
+
+## Automating manual sub-steps with the LLM
+
+`vision.classify()` accepts `images=[]` for text-only calls, so any
+previously MANUAL sub-step that compares text can be automated (see D3
+in `d_structured_data.py` for the canonical pattern). Two rules:
+
+- Use `verdict.provider == "fallback-to-manual"` as the sentinel for
+  degrading back to `Status.MANUAL` (not `verdict.verdict`).
+- When LLM input is truncated, downgrade `fail` → `NEEDS_REVIEW`; the
+  model only saw partial data and a hard FAIL would be misleading.

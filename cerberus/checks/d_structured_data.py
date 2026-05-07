@@ -7,7 +7,7 @@ from typing import Any
 import extruct
 import httpx
 
-from .. import browser
+from .. import browser, vision
 from ._utils import DEFAULT_TIMEOUT, fetch, normalize_url
 from .base import (
     CheckContext,
@@ -21,6 +21,15 @@ from .base import (
 D3_MANUAL_INSTRUCTION = (
     "Review the JSON-LD blocks shown in the check details. Confirm no free-text field "
     "(description, name, etc.) makes claims that contradict what visitors see on the page."
+)
+
+D3_SYSTEM_PROMPT = (
+    "You are an SEO auditor checking whether JSON-LD structured data is consistent with "
+    "the visible page content. You will receive the JSON-LD blocks and the rendered page text. "
+    "Answer: do any free-text fields in the JSON-LD (name, description, or similar) make claims "
+    "that a visitor reading the page would find contradicted, unsupported, or materially misleading? "
+    "Minor wording differences are fine. Only flag clear factual contradictions or invented claims. "
+    "Return JSON: {verdict: 'pass'|'fail', confidence: 0..1, reason: 'short reason ≤200 chars'}."
 )
 
 SMV_URL = "https://validator.schema.org/validate"
@@ -244,16 +253,62 @@ async def d3(ctx: CheckContext) -> CheckResult:
         Status.PASS if not url_mismatches else Status.NEEDS_REVIEW,
         detail=f"unmatched: {url_mismatches[:5]}" if url_mismatches else "ok",
     ))
-    sub.append(SubStep(
-        "Free-text fields don't contradict visible content (manual)",
-        Status.MANUAL,
-        detail="See JSON-LD summaries below.",
-        instruction=D3_MANUAL_INSTRUCTION,
-    ))
+    vcfg = ctx.site_config.vision if ctx.site_config else None
+    if vcfg and vcfg.enabled:
+        body_truncated = len(body_text) > 6000
+        blocks_truncated = len(blocks) > 5
+        truncated = body_truncated or blocks_truncated
+        user_prompt = (
+            f"JSON-LD blocks{' (first 5 of ' + str(len(blocks)) + ')' if blocks_truncated else ''}:\n"
+            f"{json.dumps(blocks[:5], indent=2)}\n\n"
+            f"Rendered page text{' (first 6000 chars only)' if body_truncated else ''}:\n{body_text[:6000]}"
+        )
+        verdict = await vision.classify(
+            vcfg,
+            system_prompt=D3_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            images=[],
+        )
+        if verdict.provider == "fallback-to-manual":
+            sub.append(SubStep(
+                "Free-text fields don't contradict visible content",
+                Status.MANUAL,
+                detail=f"LLM unavailable ({verdict.error}); review manually.",
+                instruction=D3_MANUAL_INSTRUCTION,
+            ))
+        else:
+            # Downgrade fail to NEEDS_REVIEW when body was truncated — the LLM may
+            # not have seen the later content that would support the JSON-LD claims.
+            if verdict.verdict == "pass":
+                llm_status = Status.PASS
+            elif truncated:
+                llm_status = Status.NEEDS_REVIEW
+            else:
+                llm_status = Status.FAIL
+            detail = f"{verdict.reason} (conf {verdict.confidence:.2f} via {verdict.provider}/{verdict.model})"
+            if truncated and verdict.verdict == "fail":
+                truncation_note = " + ".join(filter(None, [
+                    "body >6000 chars" if body_truncated else "",
+                    f"{len(blocks)} blocks (first 5 sent)" if blocks_truncated else "",
+                ]))
+                detail += f" [truncated: {truncation_note} — verify against full page]"
+            sub.append(SubStep(
+                "Free-text fields don't contradict visible content",
+                llm_status,
+                detail=detail,
+            ))
+    else:
+        sub.append(SubStep(
+            "Free-text fields don't contradict visible content",
+            Status.MANUAL,
+            detail="Vision/LLM disabled; review manually.",
+            instruction=D3_MANUAL_INSTRUCTION,
+        ))
     result = CheckResult.from_substeps("JSON-LD ↔ visible content.", sub)
     result.details["json_ld_summaries"] = json_ld_summaries[:10]
     result.details["json_ld_blocks"] = blocks[:5]
-    result.instruction = D3_MANUAL_INSTRUCTION
+    if any(s.status == Status.MANUAL for s in sub):
+        result.instruction = D3_MANUAL_INSTRUCTION
     return result
 
 

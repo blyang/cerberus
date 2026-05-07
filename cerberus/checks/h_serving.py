@@ -16,6 +16,7 @@ from ._utils import (
 from .base import (
     CheckContext,
     CheckResult,
+    Env,
     Severity,
     Status,
     SubStep,
@@ -123,7 +124,8 @@ async def h2(ctx: CheckContext) -> CheckResult:
 
 
 @register("H3", section="H", severity=Severity.BLOCKING,
-          title="Googlebot rendering matches browser rendering", estimate_ms=30_000)
+          title="Googlebot rendering matches browser rendering", estimate_ms=30_000,
+          applicable_envs={Env.PRODUCTION, Env.UAT})
 async def h3(ctx: CheckContext) -> CheckResult:
     creds_path = ctx.site_config.gsc_credentials_path
     inspection = await gsc.inspect_url(ctx.url, creds_path)

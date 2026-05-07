@@ -324,18 +324,97 @@ async def e4(ctx: CheckContext) -> CheckResult:
     return result
 
 
+_TAP_TARGET_JS = """
+() => {
+  const MIN = 44;
+  const vw = window.innerWidth;
+  const sel = 'a[href], button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"]';
+  const rects = [];
+  for (const el of document.querySelectorAll(sel)) {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) continue;
+    if (style.pointerEvents === 'none') continue;
+    // Skip elements off-canvas (carousels, menus hidden above/beside viewport).
+    // Keep below-fold elements (r.top >= vh) — those are valid page content.
+    if (r.right <= 0 || r.left >= vw || r.bottom <= 0) continue;
+    rects.push({
+      tag: el.tagName.toLowerCase(),
+      type: el.getAttribute('type') || '',
+      text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 60),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+      top: Math.round(r.top),
+      left: Math.round(r.left),
+      bottom: Math.round(r.bottom),
+      right: Math.round(r.right),
+      small: r.width < MIN || r.height < MIN,
+    });
+  }
+  // Detect pairwise overlaps among tappable targets.
+  const overlapping = [];
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i], b = rects[j];
+      if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) {
+        overlapping.push([i, j]);
+      }
+    }
+  }
+  return {rects, overlapping};
+}
+"""
+
+
 @register("E5", section="E", severity=Severity.RECOMMENDED,
-          title="Touch targets are adequately sized", estimate_ms=1_000)
+          title="Touch targets are adequately sized", estimate_ms=6_000)
 async def e5(ctx: CheckContext) -> CheckResult:
-    fx = await _fixture(ctx)
-    if not fx:
-        return CheckResult(Status.NEEDS_REVIEW, summary="Lighthouse fixture unavailable; rerun manually.")
-    score = (fx.get("mobile") or {}).get("tap_targets_audit")
-    if score is None:
-        return CheckResult(Status.NEEDS_REVIEW, summary="Lighthouse did not include tap-targets audit.")
-    if score >= 0.9:
-        return CheckResult(Status.PASS, summary=f"tap-targets audit: {score:.2f}")
-    return CheckResult(Status.FAIL, summary=f"tap-targets audit: {score:.2f} (< 0.9 — small/overlapping)")
+    try:
+        bp = await browser.get_browser()
+        bctx = await bp.new_context(
+            viewport={"width": 375, "height": 812},
+            user_agent=UA_CHROME_MOBILE,
+            has_touch=True,
+        )
+        try:
+            page = await bctx.new_page()
+            await page.goto(ctx.url, wait_until="networkidle", timeout=30_000)
+            elements = await page.evaluate(_TAP_TARGET_JS)
+        finally:
+            await bctx.close()
+    except Exception as exc:
+        return CheckResult(Status.NEEDS_REVIEW, summary=f"Tap-target scan failed: {exc}")
+
+    if elements is None:
+        return CheckResult(Status.NEEDS_REVIEW, summary="Tap-target JS returned None — evaluate may have failed silently.")
+    rects = elements.get("rects") or []
+    overlapping = elements.get("overlapping") or []
+    if not rects:
+        return CheckResult(Status.NEEDS_REVIEW, summary="No tappable interactive elements found at 375px — visibility filters may have culled everything.")
+
+    small = [e for e in rects if e.get("small")]
+    total = len(rects)
+    issues: list[str] = []
+    if small:
+        issues.append(f"{len(small)}/{total} element(s) smaller than 44×44px")
+    if overlapping:
+        issues.append(f"{len(overlapping)} overlapping pair(s)")
+    if not issues:
+        return CheckResult(Status.PASS, summary=f"All {total} interactive element(s) ≥ 44×44px, no overlaps.",
+                           details={"total": total, "small_targets": [], "overlapping_pairs": []})
+    small_detail = [{"tag": e["tag"], "text": e["text"], "w": e["w"], "h": e["h"]} for e in small[:10]]
+    overlap_detail = [
+        {"a": {"tag": rects[i]["tag"], "text": rects[i]["text"]},
+         "b": {"tag": rects[j]["tag"], "text": rects[j]["text"]}}
+        for i, j in overlapping[:5]
+    ]
+    return CheckResult(
+        Status.FAIL,
+        summary="; ".join(issues) + ".",
+        details={"total": total, "small_count": len(small), "small_targets": small_detail,
+                 "overlapping_pairs": overlap_detail},
+    )
 
 
 @register("E6", section="E", severity=Severity.BLOCKING,
