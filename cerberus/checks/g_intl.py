@@ -434,11 +434,15 @@ async def g6(ctx: CheckContext) -> CheckResult:
     ]
     # Geo redirect: cerberus's outbound IP IS the vantage. If the audited URL redirects to
     # a different path/host from this vantage, treat it as evidence of geo-routing.
-    # Scheme/trailing-slash differences are normalized away. Operators in a US datacenter
-    # won't get useful signal here; everywhere else this catches the common case.
+    # Trailing-slash AND scheme differences are stripped (TLS upgrades, e.g. http→https on
+    # the same path, are not geo-redirects). Operators in a US datacenter won't get useful
+    # signal here; everywhere else this catches the common case.
+    def _host_path(url: str) -> str:
+        return normalize_url(url).split("://", 1)[-1]
+
     vantage = await _vantage_info()
     redirected = (baseline.final_url
-                  and normalize_url(baseline.final_url) != normalize_url(ctx.url))
+                  and _host_path(baseline.final_url) != _host_path(ctx.url))
     if redirected:
         sub.append(SubStep(
             f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
