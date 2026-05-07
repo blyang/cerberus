@@ -245,7 +245,8 @@ STEPS: dict[str, tuple[str, str]] = {
     # carry check_id="E3a"; keep this entry so historical /report.md renders correctly.
     "E3a": (
         "Run PSI against <url>; check Performance and SEO scores on mobile + desktop.",
-        "Performance ≥ 0.90 and SEO ≥ 0.90 on both mobile and desktop.",
+        "Performance ≥ 0.90 and SEO ≥ 0.90 on both mobile and desktop.\n"
+        "Accessibility and Best Practices ≥ 0.90 where possible (target, not blocking).",
     ),
     "E3a-perf": (
         "Run PSI against <url>; check Performance score on mobile + desktop.",
