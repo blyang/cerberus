@@ -60,15 +60,16 @@ async def a1(ctx: CheckContext) -> CheckResult:
     soup = BeautifulSoup(raw.text, "lxml")
     for tag in soup(["script", "style", "template", "noscript"]):
         tag.decompose()
-    raw_visible_text = soup.get_text(" ", strip=False)
+    raw_visible_text = soup.get_text(" ", strip=False).replace("\xa0", " ")
     raw_visible_collapsed = " ".join(raw_visible_text.split())
+    raw_visible_collapsed_cf = raw_visible_collapsed.casefold()
 
     missing: list[str] = []
     for line in rendered_lines:
-        if line in raw_visible_text:
-            continue
-        collapsed = " ".join(line.split())
-        if collapsed in raw_visible_collapsed:
+        collapsed = " ".join(line.replace("\xa0", " ").split())
+        # CSS text-transform (uppercase/lowercase) makes innerText diverge from raw HTML;
+        # entities are already decoded by BeautifulSoup's get_text.
+        if collapsed.casefold() in raw_visible_collapsed_cf:
             continue
         missing.append(line)
 
