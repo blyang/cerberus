@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 # Tunables.
 HTTP_CONCURRENCY = 8
 BROWSER_DEPENDENT_IDS = {"A1", "D3", "H1", "H2", "H3"}
-LIGHTHOUSE_DEPENDENT_IDS = {"E1", "E2", "E3", "E3a", "E3b"}
+LIGHTHOUSE_DEPENDENT_IDS = {"E1", "E2", "E3", "E3a-perf", "E3a-seo", "E3b"}
 LIGHTHOUSE_FIXTURE_ESTIMATE_MS = 40_000  # mobile + desktop in parallel
 
 # Hard upper bound per check function. Lighthouse-dependent E checks just await the fixture, so

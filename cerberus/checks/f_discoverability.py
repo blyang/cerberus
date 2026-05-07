@@ -17,6 +17,7 @@ from ._utils import (
 from .base import (
     CheckContext,
     CheckResult,
+    Env,
     Severity,
     Status,
     SubStep,
@@ -64,7 +65,8 @@ async def _gather_sitemap_urls(ctx: CheckContext, sitemap_url: str, depth: int =
 
 
 @register("F1", section="F", severity=Severity.BLOCKING,
-          title="Page is in the sitemap", estimate_ms=8_000)
+          title="Page is in the sitemap", estimate_ms=8_000,
+          applicable_envs={Env.PRODUCTION})
 async def f1(ctx: CheckContext) -> CheckResult:
     host_cfg = ctx.site_config.for_url(ctx.url)
     if not host_cfg.sitemap_url:
@@ -110,7 +112,8 @@ async def f1(ctx: CheckContext) -> CheckResult:
 
 
 @register("F2", section="F", severity=Severity.RECOMMENDED,
-          title="Sitemap is declared in robots.txt", estimate_ms=4_000)
+          title="Sitemap is declared in robots.txt", estimate_ms=4_000,
+          applicable_envs={Env.PRODUCTION})
 async def f2(ctx: CheckContext) -> CheckResult:
     host_cfg = ctx.site_config.for_url(ctx.url)
     r = await fetch_url(ctx, host_cfg.robots_url_resolved())
@@ -125,7 +128,8 @@ async def f2(ctx: CheckContext) -> CheckResult:
 
 
 @register("F3", section="F", severity=Severity.BLOCKING,
-          title="robots.txt does not block the page", estimate_ms=4_000)
+          title="robots.txt does not block the page", estimate_ms=4_000,
+          applicable_envs={Env.PRODUCTION, Env.UAT})
 async def f3(ctx: CheckContext) -> CheckResult:
     host_cfg = ctx.site_config.for_url(ctx.url)
     robots_url = host_cfg.robots_url_resolved()
@@ -162,7 +166,8 @@ async def f3(ctx: CheckContext) -> CheckResult:
 
 
 @register("F4", section="F", severity=Severity.BLOCKING,
-          title="Bot access is not blocked outside robots.txt", estimate_ms=6_000)
+          title="Bot access is not blocked outside robots.txt", estimate_ms=6_000,
+          applicable_envs={Env.PRODUCTION})
 async def f4(ctx: CheckContext) -> CheckResult:
     bot_r = await fetch(ctx, user_agent=UA_GOOGLEBOT, key_suffix="googlebot")
     user_r = await fetch(ctx)
@@ -268,7 +273,8 @@ async def f8(ctx: CheckContext) -> CheckResult:
 
 
 @register("F9", section="F", severity=Severity.BLOCKING,
-          title="AI crawler/search policy is intentional", estimate_ms=4_000)
+          title="AI crawler/search policy is intentional", estimate_ms=4_000,
+          applicable_envs={Env.PRODUCTION})
 async def f9(ctx: CheckContext) -> CheckResult:
     host_cfg = ctx.site_config.for_url(ctx.url)
     if not host_cfg.allowed_bots:
@@ -309,7 +315,8 @@ async def f9(ctx: CheckContext) -> CheckResult:
 
 
 @register("F10", section="F", severity=Severity.BLOCKING,
-          title="Sitemap URL reachable and valid", estimate_ms=4_000)
+          title="Sitemap URL reachable and valid", estimate_ms=4_000,
+          applicable_envs={Env.PRODUCTION})
 async def f10(ctx: CheckContext) -> CheckResult:
     host_cfg = ctx.site_config.for_url(ctx.url)
     if not host_cfg.sitemap_url:

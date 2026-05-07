@@ -9,6 +9,7 @@ from ._utils import UA_CHROME_DESKTOP, UA_CHROME_MOBILE, fetch, fetch_url
 from .base import (
     CheckContext,
     CheckResult,
+    Env,
     Severity,
     Status,
     SubStep,
@@ -114,34 +115,43 @@ async def e3(ctx: CheckContext) -> CheckResult:
     return CheckResult.from_substeps("INP from Lighthouse.", sub)
 
 
-@register("E3a", section="E", severity=Severity.RECOMMENDED,
-          title="PageSpeed Insights overall score ≥90 for SEO and Performance", estimate_ms=1_000)
-async def e3a(ctx: CheckContext) -> CheckResult:
+async def _lighthouse_score(ctx: CheckContext, label: str, score_key: str, threshold: float, summary: str) -> CheckResult:
     fx = await _fixture(ctx)
     if not fx:
         return CheckResult(Status.FAIL, summary="Lighthouse fixture unavailable.")
     errs = _fixture_errors(fx)
     if errs and all(e for e in errs):
-        # Both devices errored — surface the underlying error.
         return CheckResult(Status.FAIL, summary="Lighthouse failed.", details={"lighthouse_errors": errs})
-    sub: list[SubStep] = []
-    for label, mobile_score, desktop_score, threshold in [
-        ("Performance ≥ 0.90",
-         (fx.get("mobile") or {}).get("scores", {}).get("performance"),
-         (fx.get("desktop") or {}).get("scores", {}).get("performance"),
-         0.90),
-        ("SEO ≥ 0.90",
-         (fx.get("mobile") or {}).get("scores", {}).get("seo"),
-         (fx.get("desktop") or {}).get("scores", {}).get("seo"),
-         0.90),
-    ]:
-        if mobile_score is None or desktop_score is None:
-            sub.append(SubStep(label, Status.FAIL, detail=f"mobile={mobile_score}, desktop={desktop_score}"))
-        else:
-            ok = mobile_score >= threshold and desktop_score >= threshold
-            sub.append(SubStep(label, Status.PASS if ok else Status.FAIL,
-                               detail=f"mobile={mobile_score:.2f} desktop={desktop_score:.2f}"))
-    return CheckResult.from_substeps("Lighthouse Perf + SEO scores.", sub)
+    m_score = (fx.get("mobile") or {}).get("scores", {}).get(score_key)
+    d_score = (fx.get("desktop") or {}).get("scores", {}).get(score_key)
+    if m_score is None or d_score is None:
+        sub = [SubStep(label, Status.FAIL, detail=f"mobile={m_score}, desktop={d_score}")]
+    else:
+        ok = m_score >= threshold and d_score >= threshold
+        sub = [SubStep(label, Status.PASS if ok else Status.FAIL,
+                       detail=f"mobile={m_score:.2f} desktop={d_score:.2f}")]
+    return CheckResult.from_substeps(summary, sub)
+
+
+# E3a was previously a single check covering both Performance and SEO. Split because the two
+# metrics have very different env sensitivity: Performance scores legitimately drop on preprod
+# (no minification, no prod CDN cache), while SEO scores measure meta tags, viewport, mobile-
+# friendliness, robots policy, canonical, structured-data presence — almost all of which is
+# identical across envs. Tagging the combined check as production-only would suppress real SEO
+# findings before deploy.
+@register("E3a-perf", section="E", severity=Severity.RECOMMENDED,
+          title="Lighthouse Performance score ≥ 0.90", estimate_ms=1_000,
+          applicable_envs={Env.PRODUCTION})
+async def e3a_perf(ctx: CheckContext) -> CheckResult:
+    return await _lighthouse_score(ctx, "Performance ≥ 0.90", "performance", 0.90,
+                                   "Lighthouse Performance score.")
+
+
+@register("E3a-seo", section="E", severity=Severity.RECOMMENDED,
+          title="Lighthouse SEO score ≥ 0.90", estimate_ms=1_000)
+async def e3a_seo(ctx: CheckContext) -> CheckResult:
+    return await _lighthouse_score(ctx, "SEO ≥ 0.90", "seo", 0.90,
+                                   "Lighthouse SEO score.")
 
 
 @register("E3b", section="E", severity=Severity.RECOMMENDED,

@@ -18,6 +18,7 @@ from ._utils import (
 from .base import (
     CheckContext,
     CheckResult,
+    Env,
     Severity,
     Status,
     SubStep,
@@ -137,7 +138,8 @@ async def b5(ctx: CheckContext) -> CheckResult:
 
 
 @register("B6", section="B", severity=Severity.BLOCKING,
-          title="Host normalization matches the site's URL architecture", estimate_ms=4_000)
+          title="Host normalization matches the site's URL architecture", estimate_ms=4_000,
+          applicable_envs={Env.PRODUCTION, Env.UAT})
 async def b6(ctx: CheckContext) -> CheckResult:
     p = urlparse(ctx.url)
     host = (p.hostname or "").lower()
