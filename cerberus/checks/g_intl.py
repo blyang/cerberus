@@ -435,7 +435,7 @@ async def g5(ctx: CheckContext) -> CheckResult:
           # backend dev). preprod/staging/local don't have an associated CDN, so the
           # Accept-Language/Cookie/geo-redirect probes can't validate the fix there
           # — and a check that only ran the trivial baseline-200 sub-step would
-          # report Pass for an unverified blocking check (codex caught this).
+          # report Pass for an unverified blocking check.
           # Restrict to envs that have CDN; the runner short-circuits to NA on others.
           applicable_envs={Env.PRODUCTION, Env.UAT})
 async def g6(ctx: CheckContext) -> CheckResult:
@@ -449,14 +449,15 @@ async def g6(ctx: CheckContext) -> CheckResult:
             test_lang = hl
             break
 
-    # Baseline: Googlebot UA, no Accept-Language, no cookies.
-    baseline = await fetch(ctx, user_agent=UA_GOOGLEBOT, key_suffix="googlebot")
-    # _fetch (vs fetch) lets us pass extra headers without polluting the cache key.
-    variant_lang = await _fetch(
-        ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Accept-Language": test_lang}
-    )
-    variant_cookie = await _fetch(
-        ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Cookie": f"locale={test_lang}"}
+    # Baseline (Googlebot, no Accept-Language) plus Accept-Language and Cookie variants
+    # plus the vantage IP lookup are all independent; gather to drop wall time from
+    # ~8s sequential to ~slowest-fetch. _fetch (vs fetch) skips the URL-keyed memo so
+    # the same URL with different headers doesn't collide.
+    baseline, variant_lang, variant_cookie, vantage = await asyncio.gather(
+        fetch(ctx, user_agent=UA_GOOGLEBOT, key_suffix="googlebot"),
+        _fetch(ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Accept-Language": test_lang}),
+        _fetch(ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Cookie": f"locale={test_lang}"}),
+        _vantage_info(),
     )
 
     def _signature(html: str) -> str:
@@ -505,7 +506,6 @@ async def g6(ctx: CheckContext) -> CheckResult:
         path = p.path.rstrip("/") or "/"
         return f"{netloc}{path}"
 
-    vantage = await _vantage_info()
     redirected = (baseline.final_url
                   and _host_path(baseline.final_url) != _host_path(ctx.url))
     vantage_label = f"vantage={vantage['country']} ({vantage['ip']})"
