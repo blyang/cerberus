@@ -18,6 +18,7 @@ import httpx
 from ._utils import (
     UA_CHROME_DESKTOP,
     UA_GOOGLEBOT,
+    _fetch,
     fetch,
     fetch_url,
     get_canonical_href,
@@ -458,7 +459,7 @@ async def g6(ctx: CheckContext) -> CheckResult:
     # Surface as NA — same env-class skip pattern as B5's apex→www.
     cdn_envs = {Env.PRODUCTION, Env.UAT}
     if ctx.environment in cdn_envs:
-        from ._utils import _fetch  # private fetch lets us pass extra headers without polluting cache key
+        # _fetch (vs fetch) lets us pass extra headers without polluting the cache key.
         variant_lang = await _fetch(
             ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Accept-Language": test_lang}
         )
@@ -508,17 +509,18 @@ async def g6(ctx: CheckContext) -> CheckResult:
         vantage = await _vantage_info()
         redirected = (baseline.final_url
                       and _host_path(baseline.final_url) != _host_path(ctx.url))
+        vantage_label = f"vantage={vantage['country']} ({vantage['ip']})"
         if redirected:
             sub.append(SubStep(
-                f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
+                "No geo-based redirect from vantage",
                 Status.FAIL,
-                detail=f"audited URL redirected to {baseline.final_url}; chain: {baseline.history[:3]}",
+                detail=f"{vantage_label}; audited URL redirected to {baseline.final_url}; chain: {baseline.history[:3]}",
             ))
         else:
             sub.append(SubStep(
-                f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
+                "No geo-based redirect from vantage",
                 Status.PASS,
-                detail=f"baseline stayed at {ctx.url}",
+                detail=f"{vantage_label}; baseline stayed at {ctx.url}",
             ))
     else:
         skip_detail = (
