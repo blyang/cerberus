@@ -78,6 +78,18 @@ JSON-LD blocks. Surface the dropped/truncated/unchecked count as a Needs-
 Review sub-step when non-zero. If the entire set was filtered out, escalate
 to NEEDS_REVIEW — don't fall through to NA, that hides the gap.
 
+The same surfacing principle applies to env-incompatible sub-steps, but the
+right status is different. When a sub-step is *expectedly* skipped because
+the env doesn't have the infra (e.g., B5's apex→www depends on a CDN edge
+rule only configured on prod), emit `Status.NA` with the reason in `detail`
+rather than omitting the SubStep. NA — not NEEDS_REVIEW — because the gap
+is known and explained. `from_substeps` treats `{PASS, NA}` as PASS, so
+semantics don't shift, but the report stays self-documenting about what
+was skipped and why. Use NEEDS_REVIEW for *uncertainty* (filter/cap drops);
+use NA for *known incompatibility* (env-class skips). Whole-check
+incompatibility still goes through `applicable_envs` at @register, not
+inline.
+
 ## `from_substeps` promotes MANUAL → NEEDS_REVIEW
 
 `CheckResult.from_substeps()` resolves `Status.MANUAL` sub-steps to

@@ -164,12 +164,20 @@ async def b5(ctx: CheckContext) -> CheckResult:
         sub.append(SubStep("http:// variant 301s to expected https:// URL", status, detail=detail))
     # 3. apex variant 301s to www. Apex→www is CDN-edge-rule territory: at strikingly
     # it's only configured on prod (per backend dev), so non-prod envs lack the redirect
-    # by deployment design rather than by bug. Skip there so we don't fail noisily.
-    if apex != host and host.startswith("www.") and ctx.environment == Env.PRODUCTION:
-        apex_variant = f"{p.scheme}://{apex}{p.path}"
-        ar = await fetch_url(ctx, apex_variant, follow_redirects=False)
-        status, detail = _variant_redirect_status(apex_variant, ar, expected_preferred)
-        sub.append(SubStep("apex variant 301s to expected www URL", status, detail=detail))
+    # by deployment design rather than by bug. Surface the skip as an NA sub-step
+    # instead of dropping it silently — keeps the gap visible in the report.
+    if apex != host and host.startswith("www."):
+        if ctx.environment == Env.PRODUCTION:
+            apex_variant = f"{p.scheme}://{apex}{p.path}"
+            ar = await fetch_url(ctx, apex_variant, follow_redirects=False)
+            status, detail = _variant_redirect_status(apex_variant, ar, expected_preferred)
+            sub.append(SubStep("apex variant 301s to expected www URL", status, detail=detail))
+        else:
+            sub.append(SubStep(
+                "apex variant 301s to expected www URL",
+                Status.NA,
+                detail=f"apex→www is a CDN edge rule only configured on prod; skipped on env={ctx.environment.value}",
+            ))
     return CheckResult.from_substeps("Duplicate URL variant consolidation.", sub)
 
 
