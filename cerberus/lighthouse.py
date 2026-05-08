@@ -113,6 +113,30 @@ async def _run(url: str, device: str) -> dict[str, Any]:
             return {"error": f"lighthouse spawn failed: {exc}"}
 
 
+def _slim_seo_audit(a: dict) -> dict[str, Any]:
+    """Minimal slice of a Lighthouse audit for SEO drill-down.
+
+    `details.items` schemas vary by audit; collect any of the common identifying
+    fields and trim to keep the cached fixture small.
+    """
+    items = ((a.get("details") or {}).get("items") or [])[:3]
+    snippets: list[str] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        node = it.get("node") if isinstance(it.get("node"), dict) else {}
+        cand = node.get("snippet") or it.get("source") or it.get("href") or it.get("url")
+        if cand:
+            snippets.append(str(cand)[:160])
+    return {
+        "score": a.get("score"),
+        "scoreDisplayMode": a.get("scoreDisplayMode"),
+        "title": a.get("title"),
+        "errorMessage": a.get("errorMessage"),
+        "snippets": snippets,
+    }
+
+
 def _extract(report: dict) -> dict[str, Any]:
     cats = report.get("categories", {})
     audits = report.get("audits", {})
@@ -121,6 +145,13 @@ def _extract(report: dict) -> dict[str, Any]:
         a = audits.get(audit_id) or {}
         v = a.get("numericValue")
         return float(v) if v is not None else None
+
+    seo_audits: dict[str, dict[str, Any]] = {}
+    for ref in cats.get("seo", {}).get("auditRefs", []) or []:
+        aid = ref.get("id")
+        a = audits.get(aid) if aid else None
+        if aid and a:
+            seo_audits[aid] = _slim_seo_audit(a)
 
     return {
         "scores": {
@@ -139,6 +170,7 @@ def _extract(report: dict) -> dict[str, Any]:
         },
         "tap_targets_audit": (audits.get("tap-targets") or {}).get("score"),
         "form_labels_audit": (audits.get("label") or {}).get("score"),
+        "seo_audits": seo_audits,
     }
 
 

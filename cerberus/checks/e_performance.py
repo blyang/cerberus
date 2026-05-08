@@ -156,11 +156,94 @@ async def e3a_perf(ctx: CheckContext) -> CheckResult:
                                    "Lighthouse Performance score.")
 
 
+# Cap surfaced individual SEO audit failures so a badly broken page doesn't flood
+# the result panel. Per CLAUDE.md "surface what wasn't evaluated", emit a tail count
+# when truncation hits — silently dropping audits #11+ would let real regressions
+# slip past the gate.
+E3A_SEO_AUDIT_CAP = 10
+
+
+def _seo_audit_failed(audit: dict) -> bool:
+    """A surfacable Lighthouse SEO audit failure.
+
+    Skips ``manual``/``notApplicable``/``informative``: those have ``score=null`` by
+    design and aren't pass/fail signals. Manual audits are operator TODOs that don't
+    affect Lighthouse's score gate; surfacing them as failures would lie about what
+    Lighthouse said.
+    """
+    mode = audit.get("scoreDisplayMode")
+    score = audit.get("score")
+    if mode == "error":
+        return True
+    if mode in ("binary", "numeric") and score is not None and score < 1.0:
+        return True
+    return False
+
+
+def _seo_audit_substeps(fx: dict) -> tuple[list[SubStep], int]:
+    """Build per-audit sub-steps for SEO failures across both devices.
+
+    An audit can fail on one device and pass on the other (e.g. mobile-only audits
+    return ``notApplicable`` on desktop). Surface any audit failing on either device
+    and tag which side(s) failed so the operator knows where to reproduce.
+    Returns (sub-steps, count truncated past the cap).
+    """
+    mobile_audits = (fx.get("mobile") or {}).get("seo_audits") or {}
+    desktop_audits = (fx.get("desktop") or {}).get("seo_audits") or {}
+    all_ids = sorted(set(mobile_audits) | set(desktop_audits))
+
+    failures: list[SubStep] = []
+    for aid in all_ids:
+        m = mobile_audits.get(aid) or {}
+        d = desktop_audits.get(aid) or {}
+        m_bad = _seo_audit_failed(m)
+        d_bad = _seo_audit_failed(d)
+        if not (m_bad or d_bad):
+            continue
+        ref = m if m_bad else d
+        title = ref.get("title") or aid
+        devices = ", ".join(name for name, bad in (("mobile", m_bad), ("desktop", d_bad)) if bad)
+        parts = [f"failed on {devices}"]
+        snippets = ref.get("snippets") or []
+        if snippets:
+            parts.append("e.g. " + " | ".join(snippets[:3]))
+        err = ref.get("errorMessage")
+        if err:
+            parts.append(f"error: {str(err)[:120]}")
+        failures.append(SubStep(f"{aid}: {title}", Status.FAIL, detail="; ".join(parts)))
+
+    truncated = max(0, len(failures) - E3A_SEO_AUDIT_CAP)
+    return failures[:E3A_SEO_AUDIT_CAP], truncated
+
+
 @register("E3a-seo", section="E", severity=Severity.RECOMMENDED,
           title="Lighthouse SEO score ≥ 0.90", estimate_ms=1_000)
 async def e3a_seo(ctx: CheckContext) -> CheckResult:
-    return await _lighthouse_score(ctx, "SEO ≥ 0.90", "seo", 0.90,
-                                   "Lighthouse SEO score.")
+    fx = await _fixture(ctx)
+    if not fx:
+        return CheckResult(Status.FAIL, summary="Lighthouse fixture unavailable.")
+    errs = _fixture_errors(fx)
+    if errs and all(e for e in errs):
+        return CheckResult(Status.FAIL, summary="Lighthouse failed.", details={"lighthouse_errors": errs})
+
+    m_score = (fx.get("mobile") or {}).get("scores", {}).get("seo")
+    d_score = (fx.get("desktop") or {}).get("scores", {}).get("seo")
+    if m_score is None or d_score is None:
+        score_step = SubStep("SEO ≥ 0.90", Status.FAIL, detail=f"mobile={m_score}, desktop={d_score}")
+    else:
+        ok = m_score >= 0.90 and d_score >= 0.90
+        score_step = SubStep("SEO ≥ 0.90", Status.PASS if ok else Status.FAIL,
+                             detail=f"mobile={m_score:.2f} desktop={d_score:.2f}")
+
+    audit_steps, truncated = _seo_audit_substeps(fx)
+    if truncated:
+        audit_steps.append(SubStep(
+            f"+{truncated} more SEO audit failure(s) not shown",
+            Status.NEEDS_REVIEW,
+            detail=f"surfaced cap = {E3A_SEO_AUDIT_CAP}; see full Lighthouse report"))
+
+    return CheckResult.from_substeps("Lighthouse SEO score + per-audit drill-down.",
+                                     [score_step, *audit_steps])
 
 
 @register("E3b", section="E", severity=Severity.RECOMMENDED,
