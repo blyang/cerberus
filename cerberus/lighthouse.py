@@ -113,21 +113,53 @@ async def _run(url: str, device: str) -> dict[str, Any]:
             return {"error": f"lighthouse spawn failed: {exc}"}
 
 
+def _format_audit_item(it: dict) -> str | None:
+    """Render a Lighthouse ``details.items[i]`` entry as one readable line.
+
+    SEO-category audits use at least four item shapes — picking the wrong field
+    silently surfaces a Python dict repr (``{'type': 'source-location', ...}``)
+    or a bare URL when the actual signal lives elsewhere.
+    """
+    # Node-nested: image-alt, crawlable-anchors, tap-targets, font-size.
+    node = it.get("node") if isinstance(it.get("node"), dict) else None
+    if node:
+        snip = node.get("snippet") or node.get("nodeLabel")
+        if snip:
+            return str(snip)
+    # Link-shaped: link-text. Format as ``"visible text" → href`` so the
+    # operator sees the failing anchor text alongside its destination.
+    if "text" in it and "href" in it:
+        return f'"{it["text"]}" → {it["href"]}'
+    # Source-location wrapper: is-crawlable, robots-txt — points to a file/line.
+    src = it.get("source") if isinstance(it.get("source"), dict) else None
+    if src and src.get("type") == "source-location":
+        url = src.get("url", "")
+        line = src.get("line")
+        col = src.get("column")
+        if line is not None:
+            return f"{url}:{line}:{col}" if col is not None else f"{url}:{line}"
+        return url or None
+    # Plain string fields as last resort.
+    for k in ("source", "href", "url"):
+        v = it.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
 def _slim_seo_audit(a: dict) -> dict[str, Any]:
     """Minimal slice of a Lighthouse audit for SEO drill-down.
 
-    `details.items` schemas vary by audit; collect any of the common identifying
-    fields and trim to keep the cached fixture small.
+    Trim to keep the cached fixture small; only the first 3 items are kept.
     """
     items = ((a.get("details") or {}).get("items") or [])[:3]
     snippets: list[str] = []
     for it in items:
         if not isinstance(it, dict):
             continue
-        node = it.get("node") if isinstance(it.get("node"), dict) else {}
-        cand = node.get("snippet") or it.get("source") or it.get("href") or it.get("url")
-        if cand:
-            snippets.append(str(cand)[:160])
+        snip = _format_audit_item(it)
+        if snip:
+            snippets.append(snip[:200])
     return {
         "score": a.get("score"),
         "scoreDisplayMode": a.get("scoreDisplayMode"),
