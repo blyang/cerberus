@@ -162,8 +162,10 @@ async def b5(ctx: CheckContext) -> CheckResult:
         hr = await fetch_url(ctx, http_variant, follow_redirects=False)
         status, detail = _variant_redirect_status(http_variant, hr, expected_preferred)
         sub.append(SubStep("http:// variant 301s to expected https:// URL", status, detail=detail))
-    # 3. apex variant 301s to www.
-    if apex != host and host.startswith("www."):
+    # 3. apex variant 301s to www. Apex→www is CDN-edge-rule territory: at strikingly
+    # it's only configured on prod (per backend dev), so non-prod envs lack the redirect
+    # by deployment design rather than by bug. Skip there so we don't fail noisily.
+    if apex != host and host.startswith("www.") and ctx.environment == Env.PRODUCTION:
         apex_variant = f"{p.scheme}://{apex}{p.path}"
         ar = await fetch_url(ctx, apex_variant, follow_redirects=False)
         status, detail = _variant_redirect_status(apex_variant, ar, expected_preferred)
@@ -173,7 +175,7 @@ async def b5(ctx: CheckContext) -> CheckResult:
 
 @register("B6", section="B", severity=Severity.BLOCKING,
           title="Host normalization matches the site's URL architecture", estimate_ms=4_000,
-          applicable_envs={Env.PRODUCTION, Env.UAT})
+          applicable_envs={Env.PRODUCTION})
 async def b6(ctx: CheckContext) -> CheckResult:
     p = urlparse(ctx.url)
     host = (p.hostname or "").lower()
