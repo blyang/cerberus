@@ -100,3 +100,23 @@ in `d_structured_data.py` for the canonical pattern). Two rules:
   degrading back to `Status.MANUAL` (not `verdict.verdict`).
 - When LLM input is truncated, downgrade `fail` → `NEEDS_REVIEW`; the
   model only saw partial data and a hard FAIL would be misleading.
+
+## Lighthouse details.items shape varies per audit
+
+Lighthouse audits in the SEO category emit `audit.details.items[*]` with at
+least four shapes, none of which are documented in the LHR schema:
+
+- **Node-nested**: `{"node": {"snippet": "<...>", "nodeLabel": "..."}}` —
+  `image-alt`, `crawlable-anchors`, `tap-targets`, `font-size`
+- **Link-shaped (flat)**: `{"href": "...", "text": "...", "textLang": "en"}` —
+  `link-text` (no `node` wrapper at all)
+- **Source-location wrapper**: `{"source": {"type": "source-location", "url",
+  "line", "column"}}` — `is-crawlable`, `robots-txt`
+- **Plain URL**: `{"url": "..."}` — performance-side audits
+
+A single fallback chain like `node.snippet → href → url` silently produces
+wrong output: a `link-text` failure renders as just the URL (hiding "Learn
+More" — the actual non-descriptive text), and `is-crawlable` renders as a
+Python dict repr. Dispatch by shape (see `_format_audit_item` in
+`cerberus/lighthouse.py`) — and verify against a real fixture, not the
+schema docs.
