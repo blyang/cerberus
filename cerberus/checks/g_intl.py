@@ -26,6 +26,7 @@ from ._utils import (
 from .base import (
     CheckContext,
     CheckResult,
+    Env,
     Severity,
     Status,
     SubStep,
@@ -442,73 +443,101 @@ async def g6(ctx: CheckContext) -> CheckResult:
 
     # Baseline: Googlebot UA, no Accept-Language, no cookies.
     baseline = await fetch(ctx, user_agent=UA_GOOGLEBOT, key_suffix="googlebot")
-    # Variant: Accept-Language set to non-default locale.
-    from ._utils import _fetch  # private fetch lets us pass extra headers without polluting cache key
-    variant_lang = await _fetch(
-        ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Accept-Language": test_lang}
-    )
-    variant_cookie = await _fetch(
-        ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Cookie": f"locale={test_lang}"}
-    )
-
-    def _signature(html: str) -> str:
-        # Comparison signature: title + canonical + h1, which is enough to tell a swap from the same page.
-        title = (re.search(r"<title[^>]*>([^<]*)</title>", html or "", re.I) or [None, ""])[1].strip()
-        canon = (re.search(r'<link[^>]+rel="canonical"[^>]+href="([^"]*)"', html or "", re.I) or [None, ""])[1].strip()
-        h1 = (re.search(r"<h1[^>]*>([^<]*)</h1>", html or "", re.I) or [None, ""])[1].strip()
-        return f"{title}||{canon}||{h1}"
-
-    base_sig = _signature(baseline.text)
-    lang_sig = _signature(variant_lang.text)
-    cookie_sig = _signature(variant_cookie.text)
     sub = [
         SubStep(
             "Baseline (Googlebot, no Accept-Language) returns 200",
             Status.PASS if baseline.status_code == 200 else Status.FAIL,
             detail=f"status={baseline.status_code}",
         ),
-        SubStep(
+    ]
+
+    # The Accept-Language / Cookie / geo-redirect sub-steps depend on CDN-level
+    # locale routing — at strikingly the locale-adaptive serving fix lives at
+    # the CDN edge (per backend dev), and preprod/staging/local don't have a
+    # CDN associated, so the variant tests can't validate the fix there.
+    # Surface as NA — same env-class skip pattern as B5's apex→www.
+    cdn_envs = {Env.PRODUCTION, Env.UAT}
+    if ctx.environment in cdn_envs:
+        from ._utils import _fetch  # private fetch lets us pass extra headers without polluting cache key
+        variant_lang = await _fetch(
+            ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Accept-Language": test_lang}
+        )
+        variant_cookie = await _fetch(
+            ctx.url, user_agent=UA_GOOGLEBOT, extra_headers={"Cookie": f"locale={test_lang}"}
+        )
+
+        def _signature(html: str) -> str:
+            # Comparison signature: title + canonical + h1, which is enough to tell a swap from the same page.
+            title = (re.search(r"<title[^>]*>([^<]*)</title>", html or "", re.I) or [None, ""])[1].strip()
+            canon = (re.search(r'<link[^>]+rel="canonical"[^>]+href="([^"]*)"', html or "", re.I) or [None, ""])[1].strip()
+            h1 = (re.search(r"<h1[^>]*>([^<]*)</h1>", html or "", re.I) or [None, ""])[1].strip()
+            return f"{title}||{canon}||{h1}"
+
+        base_sig = _signature(baseline.text)
+        lang_sig = _signature(variant_lang.text)
+        cookie_sig = _signature(variant_cookie.text)
+        sub.append(SubStep(
             f"Accept-Language: {test_lang} does not switch content",
             Status.PASS if base_sig == lang_sig else Status.FAIL,
             detail=(f"baseline title/canonical/h1 = variant" if base_sig == lang_sig
                     else f"diverged — content switched via Accept-Language"),
-        ),
-        SubStep(
+        ))
+        sub.append(SubStep(
             f"Cookie locale={test_lang} does not switch content",
             Status.PASS if base_sig == cookie_sig else Status.FAIL,
             detail=(f"baseline = cookie variant" if base_sig == cookie_sig
                     else "diverged — content switched via cookie"),
-        ),
-    ]
-    # Geo redirect: cerberus's outbound IP IS the vantage. If the audited URL redirects to
-    # a different path/host from this vantage, treat it as evidence of geo-routing.
-    # Trailing-slash AND scheme differences are stripped (TLS upgrades, e.g. http→https on
-    # the same path, are not geo-redirects). Operators in a US datacenter won't get useful
-    # signal here; everywhere else this catches the common case.
-    def _host_path(url: str) -> str:
-        p = urlparse(url)
-        host = (p.hostname or "").lower()
-        port = p.port
-        # Drop default ports so http://h:80 and https://h match on a TLS upgrade.
-        if (p.scheme == "http" and port == 80) or (p.scheme == "https" and port == 443):
-            port = None
-        netloc = f"{host}:{port}" if port else host
-        path = p.path.rstrip("/") or "/"
-        return f"{netloc}{path}"
-
-    vantage = await _vantage_info()
-    redirected = (baseline.final_url
-                  and _host_path(baseline.final_url) != _host_path(ctx.url))
-    if redirected:
-        sub.append(SubStep(
-            f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
-            Status.FAIL,
-            detail=f"audited URL redirected to {baseline.final_url}; chain: {baseline.history[:3]}",
         ))
+
+        # Geo redirect: cerberus's outbound IP IS the vantage. If the audited URL redirects to
+        # a different path/host from this vantage, treat it as evidence of geo-routing.
+        # Trailing-slash AND scheme differences are stripped (TLS upgrades, e.g. http→https on
+        # the same path, are not geo-redirects). Operators in a US datacenter won't get useful
+        # signal here; everywhere else this catches the common case.
+        def _host_path(url: str) -> str:
+            p = urlparse(url)
+            host = (p.hostname or "").lower()
+            port = p.port
+            # Drop default ports so http://h:80 and https://h match on a TLS upgrade.
+            if (p.scheme == "http" and port == 80) or (p.scheme == "https" and port == 443):
+                port = None
+            netloc = f"{host}:{port}" if port else host
+            path = p.path.rstrip("/") or "/"
+            return f"{netloc}{path}"
+
+        vantage = await _vantage_info()
+        redirected = (baseline.final_url
+                      and _host_path(baseline.final_url) != _host_path(ctx.url))
+        if redirected:
+            sub.append(SubStep(
+                f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
+                Status.FAIL,
+                detail=f"audited URL redirected to {baseline.final_url}; chain: {baseline.history[:3]}",
+            ))
+        else:
+            sub.append(SubStep(
+                f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
+                Status.PASS,
+                detail=f"baseline stayed at {ctx.url}",
+            ))
     else:
+        skip_detail = (
+            f"locale-adaptive serving is implemented at the CDN edge; "
+            f"env={ctx.environment.value} has no CDN — verify on UAT or production"
+        )
         sub.append(SubStep(
-            f"No geo-based redirect from {vantage['country']} vantage ({vantage['ip']})",
-            Status.PASS,
-            detail=f"baseline stayed at {ctx.url}",
+            f"Accept-Language: {test_lang} does not switch content",
+            Status.NA,
+            detail=skip_detail,
+        ))
+        sub.append(SubStep(
+            f"Cookie locale={test_lang} does not switch content",
+            Status.NA,
+            detail=skip_detail,
+        ))
+        sub.append(SubStep(
+            "No geo-based redirect from vantage",
+            Status.NA,
+            detail=skip_detail,
         ))
     return CheckResult.from_substeps("Locale-adaptive serving.", sub)
