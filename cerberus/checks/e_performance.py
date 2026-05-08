@@ -124,6 +124,14 @@ async def e3(ctx: CheckContext) -> CheckResult:
     return CheckResult.from_substeps("INP from Lighthouse.", sub)
 
 
+def _score_substep(label: str, m_score: float | None, d_score: float | None, threshold: float) -> SubStep:
+    if m_score is None or d_score is None:
+        return SubStep(label, Status.FAIL, detail=f"mobile={m_score}, desktop={d_score}")
+    ok = m_score >= threshold and d_score >= threshold
+    return SubStep(label, Status.PASS if ok else Status.FAIL,
+                   detail=f"mobile={m_score:.2f} desktop={d_score:.2f}")
+
+
 async def _lighthouse_score(ctx: CheckContext, label: str, score_key: str, threshold: float, summary: str) -> CheckResult:
     fx = await _fixture(ctx)
     if not fx:
@@ -133,13 +141,7 @@ async def _lighthouse_score(ctx: CheckContext, label: str, score_key: str, thres
         return CheckResult(Status.FAIL, summary="Lighthouse failed.", details={"lighthouse_errors": errs})
     m_score = (fx.get("mobile") or {}).get("scores", {}).get(score_key)
     d_score = (fx.get("desktop") or {}).get("scores", {}).get(score_key)
-    if m_score is None or d_score is None:
-        sub = [SubStep(label, Status.FAIL, detail=f"mobile={m_score}, desktop={d_score}")]
-    else:
-        ok = m_score >= threshold and d_score >= threshold
-        sub = [SubStep(label, Status.PASS if ok else Status.FAIL,
-                       detail=f"mobile={m_score:.2f} desktop={d_score:.2f}")]
-    return CheckResult.from_substeps(summary, sub)
+    return CheckResult.from_substeps(summary, [_score_substep(label, m_score, d_score, threshold)])
 
 
 # E3a was previously a single check covering both Performance and SEO. Split because the two
@@ -156,10 +158,6 @@ async def e3a_perf(ctx: CheckContext) -> CheckResult:
                                    "Lighthouse Performance score.")
 
 
-# Cap surfaced individual SEO audit failures so a badly broken page doesn't flood
-# the result panel. Per CLAUDE.md "surface what wasn't evaluated", emit a tail count
-# when truncation hits — silently dropping audits #11+ would let real regressions
-# slip past the gate.
 E3A_SEO_AUDIT_CAP = 10
 
 
@@ -200,14 +198,13 @@ def _seo_audit_substeps(fx: dict) -> tuple[list[SubStep], int]:
         d_bad = _seo_audit_failed(d)
         if not (m_bad or d_bad):
             continue
-        # Title comes from whichever side has it; both should agree, but pick
-        # the failing side first so we don't accidentally inherit a stale title
-        # from a passing-but-present desktop entry.
-        title = (m if m_bad else d).get("title") or (d if d_bad else m).get("title") or aid
+        # Read fields from the failing side first so a passing-but-present entry
+        # on the other side can't shadow stale title/error data.
+        def _from_failing(field: str):
+            return (m if m_bad else d).get(field) or (d if d_bad else m).get(field)
+        title = _from_failing("title") or aid
         devices = ", ".join(name for name, bad in (("mobile", m_bad), ("desktop", d_bad)) if bad)
         parts = [f"failed on {devices}"]
-        # Union snippets across both failing sides (preserving order, deduped) —
-        # mobile may have empty snippets while desktop has rich examples or vice versa.
         seen: set[str] = set()
         merged: list[str] = []
         for side, bad in ((m, m_bad), (d, d_bad)):
@@ -219,7 +216,7 @@ def _seo_audit_substeps(fx: dict) -> tuple[list[SubStep], int]:
                     merged.append(s)
         if merged:
             parts.append("e.g. " + " | ".join(merged[:3]))
-        err = (m if m_bad else d).get("errorMessage") or (d if d_bad else m).get("errorMessage")
+        err = _from_failing("errorMessage")
         if err:
             parts.append(f"error: {str(err)[:120]}")
         failures.append(SubStep(f"{aid}: {title}", Status.FAIL, detail="; ".join(parts)))
@@ -244,12 +241,7 @@ async def e3a_seo(ctx: CheckContext) -> CheckResult:
 
     m_score = (fx.get("mobile") or {}).get("scores", {}).get("seo")
     d_score = (fx.get("desktop") or {}).get("scores", {}).get("seo")
-    if m_score is None or d_score is None:
-        score_step = SubStep("SEO ≥ 0.90", Status.FAIL, detail=f"mobile={m_score}, desktop={d_score}")
-    else:
-        ok = m_score >= 0.90 and d_score >= 0.90
-        score_step = SubStep("SEO ≥ 0.90", Status.PASS if ok else Status.FAIL,
-                             detail=f"mobile={m_score:.2f} desktop={d_score:.2f}")
+    score_step = _score_substep("SEO ≥ 0.90", m_score, d_score, 0.90)
 
     # If exactly one device errored, the audit set is partial: the broken side
     # contributed nothing. Per CLAUDE.md "surface what wasn't evaluated", emit a

@@ -148,10 +148,7 @@ def _format_audit_item(it: dict) -> str | None:
 
 
 def _slim_seo_audit(a: dict) -> dict[str, Any]:
-    """Minimal slice of a Lighthouse audit for SEO drill-down.
-
-    Trim to keep the cached fixture small; only the first 3 items are kept.
-    """
+    """Minimal slice of a Lighthouse audit for SEO drill-down."""
     details = a.get("details")
     raw_items = details.get("items") if isinstance(details, dict) else None
     items = (raw_items if isinstance(raw_items, list) else [])[:3]
@@ -202,8 +199,6 @@ def _extract(report: dict) -> dict[str, Any]:
             "tbt_ms": num("total-blocking-time"),
             "tti_ms": num("interactive"),
         },
-        "tap_targets_audit": (audits.get("tap-targets") or {}).get("score"),
-        "form_labels_audit": (audits.get("label") or {}).get("score"),
         "seo_audits": seo_audits,
     }
 
