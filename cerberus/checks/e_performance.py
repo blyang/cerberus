@@ -200,14 +200,26 @@ def _seo_audit_substeps(fx: dict) -> tuple[list[SubStep], int]:
         d_bad = _seo_audit_failed(d)
         if not (m_bad or d_bad):
             continue
-        ref = m if m_bad else d
-        title = ref.get("title") or aid
+        # Title comes from whichever side has it; both should agree, but pick
+        # the failing side first so we don't accidentally inherit a stale title
+        # from a passing-but-present desktop entry.
+        title = (m if m_bad else d).get("title") or (d if d_bad else m).get("title") or aid
         devices = ", ".join(name for name, bad in (("mobile", m_bad), ("desktop", d_bad)) if bad)
         parts = [f"failed on {devices}"]
-        snippets = ref.get("snippets") or []
-        if snippets:
-            parts.append("e.g. " + " | ".join(snippets[:3]))
-        err = ref.get("errorMessage")
+        # Union snippets across both failing sides (preserving order, deduped) —
+        # mobile may have empty snippets while desktop has rich examples or vice versa.
+        seen: set[str] = set()
+        merged: list[str] = []
+        for side, bad in ((m, m_bad), (d, d_bad)):
+            if not bad:
+                continue
+            for s in (side.get("snippets") or []):
+                if s not in seen:
+                    seen.add(s)
+                    merged.append(s)
+        if merged:
+            parts.append("e.g. " + " | ".join(merged[:3]))
+        err = (m if m_bad else d).get("errorMessage") or (d if d_bad else m).get("errorMessage")
         if err:
             parts.append(f"error: {str(err)[:120]}")
         failures.append(SubStep(f"{aid}: {title}", Status.FAIL, detail="; ".join(parts)))
@@ -222,8 +234,12 @@ async def e3a_seo(ctx: CheckContext) -> CheckResult:
     fx = await _fixture(ctx)
     if not fx:
         return CheckResult(Status.FAIL, summary="Lighthouse fixture unavailable.")
+    # Only bail outright when BOTH devices errored. If one is healthy, surface
+    # its per-audit drilldown and emit a NEEDS_REVIEW step naming the broken side.
+    # (E1/E2/E3/E3a-perf/E3b use a looser ``errs and all(...)`` guard that bails on
+    # any error; that's fine for score-only checks but throws away usable signal here.)
     errs = _fixture_errors(fx)
-    if errs and all(e for e in errs):
+    if (fx.get("mobile") or {}).get("error") and (fx.get("desktop") or {}).get("error"):
         return CheckResult(Status.FAIL, summary="Lighthouse failed.", details={"lighthouse_errors": errs})
 
     m_score = (fx.get("mobile") or {}).get("scores", {}).get("seo")
@@ -235,15 +251,29 @@ async def e3a_seo(ctx: CheckContext) -> CheckResult:
         score_step = SubStep("SEO ≥ 0.90", Status.PASS if ok else Status.FAIL,
                              detail=f"mobile={m_score:.2f} desktop={d_score:.2f}")
 
+    # If exactly one device errored, the audit set is partial: the broken side
+    # contributed nothing. Per CLAUDE.md "surface what wasn't evaluated", emit a
+    # NEEDS_REVIEW sub-step naming which side was unrepresented so the operator
+    # doesn't read a clean per-audit list as comprehensive.
+    partial_steps: list[SubStep] = []
+    for device in ("mobile", "desktop"):
+        if (fx.get(device) or {}).get("error"):
+            partial_steps.append(SubStep(
+                f"{device} Lighthouse run errored — per-audit data unavailable for this side",
+                Status.NEEDS_REVIEW,
+                detail=str((fx.get(device) or {}).get("error"))[:160]))
+
     audit_steps, truncated = _seo_audit_substeps(fx)
     if truncated:
+        # The truncated audits are confirmed failures, not unknowns. Marking the
+        # tail as FAIL keeps the badge color faithful to what Lighthouse reported.
         audit_steps.append(SubStep(
             f"+{truncated} more SEO audit failure(s) not shown",
-            Status.NEEDS_REVIEW,
+            Status.FAIL,
             detail=f"surfaced cap = {E3A_SEO_AUDIT_CAP}; see full Lighthouse report"))
 
     return CheckResult.from_substeps("Lighthouse SEO score + per-audit drill-down.",
-                                     [score_step, *audit_steps])
+                                     [score_step, *partial_steps, *audit_steps])
 
 
 @register("E3b", section="E", severity=Severity.RECOMMENDED,

@@ -152,7 +152,9 @@ def _slim_seo_audit(a: dict) -> dict[str, Any]:
 
     Trim to keep the cached fixture small; only the first 3 items are kept.
     """
-    items = ((a.get("details") or {}).get("items") or [])[:3]
+    details = a.get("details")
+    raw_items = details.get("items") if isinstance(details, dict) else None
+    items = (raw_items if isinstance(raw_items, list) else [])[:3]
     snippets: list[str] = []
     for it in items:
         if not isinstance(it, dict):
