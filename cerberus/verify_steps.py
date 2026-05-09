@@ -446,11 +446,12 @@ STEPS: dict[str, tuple[str, str]] = {
         "4. No hidden-content CSS tricks on text nodes within <main>/<article>.",
     ),
     "H3": (
-        "1. GSC URL Inspection API → 'Test Live URL' on <url>; save rendered HTML → gsc.html.\n"
-        "2. Render <url> in Playwright; save rendered HTML → browser.html.\n"
-        "3. diff <(sed -n '/<main/,/<\\/main>/p' gsc.html) <(sed -n '/<main/,/<\\/main>/p' browser.html)",
-        "1. gsc.html non-empty with <main>/<article>.\n"
-        "2. browser.html non-empty with <main>/<article>.\n"
+        "1. Render <url> in Playwright with Googlebot WRS UA; save rendered HTML → bot.html.\n"
+        "2. Render <url> in Playwright with normal Chrome UA; save rendered HTML → user.html.\n"
+        "3. diff <(sed -n '/<main/,/<\\/main>/p' bot.html) <(sed -n '/<main/,/<\\/main>/p' user.html)\n"
+        "4. Optional ground truth: paste <url> into GSC URL Inspection → Test Live URL → View Tested Page; visually compare against bot.html.",
+        "1. Both renders return HTTP 2xx (no anti-bot challenge).\n"
+        "2. Both renders contain <main>/<article> with primary content.\n"
         "3. diff empty (or limited to non-content variance).",
     ),
 }

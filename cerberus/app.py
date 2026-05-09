@@ -43,7 +43,6 @@ async def api_config() -> dict[str, Any]:
     return {
         "default_url": config.default_url,
         "known_hosts": list(config.hosts.keys()),
-        "gsc_configured": bool(config.gsc_credentials_path and Path(config.gsc_credentials_path).exists()),
         "environments": [e.value for e in Env],
         "default_environment": Env.PRODUCTION.value,
     }

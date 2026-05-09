@@ -1,31 +1,26 @@
 """H — Serving Integrity & Search Policy Hygiene."""
 from __future__ import annotations
 
+import asyncio
 import re
 from difflib import SequenceMatcher
 
 from inscriptis import get_text as html_to_text
 
-from .. import browser, gsc
+from .. import browser
 from ._utils import (
     UA_CHROME_DESKTOP,
     UA_GOOGLEBOT,
     fetch,
     primary_content_text,
-)
+)  # H1 still uses the static constants for raw-HTTP cloaking diff (no browser involved).
 from .base import (
     CheckContext,
     CheckResult,
-    Env,
     Severity,
     Status,
     SubStep,
     register,
-)
-
-H3_FALLBACK_INSTRUCTION = (
-    "Optional: run GSC URL Inspection → Test Live URL on this page. Compare the rendered HTML to "
-    "the headless browser render shown in the check details. Subject to GSC daily quota."
 )
 
 
@@ -123,46 +118,74 @@ async def h2(ctx: CheckContext) -> CheckResult:
     return CheckResult.from_substeps("Hidden-content scan.", sub)
 
 
+H3_INSTRUCTION = (
+    "Diagnostic only: this is a local Chromium simulation of Googlebot, not Google's actual "
+    "Web Rendering Service (WRS). Substantial differences between the Googlebot-UA render and "
+    "the browser render are worth investigating; identical results don't prove WRS will agree. "
+    "For ground truth, paste the URL into GSC URL Inspection → Test Live URL → View Tested Page."
+)
+
+
 @register("H3", section="H", severity=Severity.BLOCKING,
-          title="Googlebot rendering matches browser rendering", estimate_ms=30_000,
-          applicable_envs={Env.PRODUCTION, Env.UAT})
+          title="Googlebot rendering matches browser rendering", estimate_ms=30_000)
 async def h3(ctx: CheckContext) -> CheckResult:
-    creds_path = ctx.site_config.gsc_credentials_path
-    inspection = await gsc.inspect_url(ctx.url, creds_path)
-    if inspection.get("error"):
-        return CheckResult(
-            Status.MANUAL,
-            summary=f"GSC unavailable: {inspection['error']}. Falling back to manual instruction.",
-            instruction=H3_FALLBACK_INSTRUCTION,
-            details={"gsc_error": inspection["error"]},
-        )
-    raw_payload = inspection.get("raw") or {}
-    inspect_result = (raw_payload.get("inspectionResult") or {})
-    index_status = (inspect_result.get("indexStatusResult") or {}).get("verdict")
-    rendered_html = ((inspect_result.get("liveInspectionResult") or {}).get("renderedPageInfo") or {}).get("html")
-    if not rendered_html:
-        return CheckResult(
-            Status.MANUAL,
-            summary="GSC returned no rendered HTML (live inspection may need to be re-run interactively).",
-            instruction=H3_FALLBACK_INSTRUCTION,
-            details={"index_status": index_status},
-        )
-    browser_render = await browser.render_page(ctx.url)
-    if browser_render.get("error"):
-        return CheckResult(Status.FAIL, summary=f"headless render failed: {browser_render['error']}")
-    gsc_main = primary_content_text(rendered_html)
-    browser_main = primary_content_text(browser_render["html"])
-    sim = _similarity(gsc_main, browser_main)
-    # Per brief R2.1, H3 belongs in the "Needs Review" bucket — partly automated, requires a final
-    # human glance. We surface the diff metric as diagnostic detail but do not auto-pass/fail.
-    return CheckResult(
-        Status.NEEDS_REVIEW,
-        summary=f"Googlebot↔browser render diff (similarity {sim:.3f}). Final review required.",
-        instruction=H3_FALLBACK_INSTRUCTION,
-        details={
-            "similarity": sim,
-            "gsc_len": len(gsc_main),
-            "browser_len": len(browser_main),
-            "index_status": (inspect_result.get("indexStatusResult") or {}).get("verdict"),
-        },
+    # Pin both UAs to the live browser Chrome version — version skew between bot and user
+    # would otherwise show up as content diffs on sites with version-gated banners or shims.
+    bot_ua = await browser.googlebot_wrs_ua()
+    user_ua = await browser.chrome_desktop_ua()
+    bot_render, user_render = await asyncio.gather(
+        browser.render_page(ctx.url, user_agent=bot_ua),
+        browser.render_page(ctx.url, user_agent=user_ua),
     )
+    if bot_render.get("error"):
+        return CheckResult(Status.FAIL, summary=f"Googlebot-UA render failed: {bot_render['error']}")
+    if user_render.get("error"):
+        return CheckResult(Status.FAIL, summary=f"user-UA render failed: {user_render['error']}")
+    bot_status = bot_render.get("status") or 0
+    user_status = user_render.get("status") or 0
+    bot_main = primary_content_text(bot_render.get("html") or "")
+    user_main = primary_content_text(user_render.get("html") or "")
+    bot_norm = _normalize_for_compare(bot_main)
+    user_norm = _normalize_for_compare(user_main)
+    sim = _similarity(bot_norm, user_norm)
+    channel = browser.get_channel_used()
+    # A non-2xx response to the Googlebot UA (CDN block, anti-bot challenge, captcha) would
+    # otherwise score similarity against the error page body — flag it explicitly so the
+    # operator sees the bot was blocked rather than chasing a false content-mismatch verdict.
+    sub = [
+        SubStep("Googlebot-UA render returned 2xx",
+                Status.PASS if 200 <= bot_status < 300 else Status.FAIL,
+                detail=f"HTTP {bot_status}"),
+        SubStep("user-UA render returned 2xx",
+                Status.PASS if 200 <= user_status < 300 else Status.FAIL,
+                detail=f"HTTP {user_status}"),
+        SubStep("Googlebot-UA render returned primary content",
+                Status.PASS if bot_main else Status.FAIL,
+                detail=f"len: {len(bot_main)}; channel: {channel}"),
+        SubStep("user-UA render returned primary content",
+                Status.PASS if user_main else Status.FAIL,
+                detail=f"len: {len(user_main)}"),
+        SubStep(
+            "Googlebot-UA vs user-UA primary content similarity ≥ 0.90",
+            Status.PASS if sim >= 0.90 else (Status.NEEDS_REVIEW if sim >= 0.75 else Status.FAIL),
+            detail=f"similarity: {sim:.3f}",
+        ),
+    ]
+    result = CheckResult.from_substeps(
+        f"Googlebot-UA↔user-UA render diff (similarity {sim:.3f}).", sub,
+    )
+    # Cap clean runs at NEEDS_REVIEW so the WRS-vs-simulation gap is honest and so the
+    # operator-override UI path (Manual/NEEDS_REVIEW only — see report.py) stays open.
+    if result.status == Status.PASS:
+        result.status = Status.NEEDS_REVIEW
+    result.details.update({
+        "similarity": sim,
+        "bot_status": bot_status,
+        "user_status": user_status,
+        "bot_len": len(bot_main),
+        "user_len": len(user_main),
+        "browser_channel": channel,
+        "googlebot_ua": bot_ua,
+    })
+    result.instruction = H3_INSTRUCTION
+    return result

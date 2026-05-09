@@ -84,7 +84,7 @@ The tool fetches operator-supplied URLs and **secondary URLs derived from each p
 - ✅ **Redirect-chain SSRF guard**: httpx auto-redirects are disabled; we walk redirects manually and re-validate every Location target, capped at 8 hops.
 - ⚠️ **DNS-rebinding residual risk**: an attacker controlling DNS for `attacker.example` could return a public IP at validation time and a private IP when the actual request is issued (a subsequent resolution by httpx / Playwright / Lighthouse). Mitigation requires pinning a single resolved IP through the entire request lifecycle across three different networking stacks; not implemented. **Don't run Cerberus against URLs you suspect are adversarial.**
 - ⚠️ **No request-time auth**: any device on the Tailscale tailnet that can reach `:8000` can list and read all runs and submit new ones. This is by design (per the brief) and relies on Tailscale's identity boundary. If you ever expose port 8000 beyond the tailnet, add an auth layer first.
-- ⚠️ **Error verbosity**: HTTP fetch / Playwright / Lighthouse / parser exceptions are persisted into `check_results.details_json` and exposed via `/api/runs/{id}`. They can include URLs, parse internals, and library error text. No credentials leak (those go through the redacted `gsc.py` path), but consider this when sharing run data.
+- ⚠️ **Error verbosity**: HTTP fetch / Playwright / Lighthouse / parser exceptions are persisted into `check_results.details_json` and exposed via `/api/runs/{id}`. They can include URLs, parse internals, and library error text. Consider this when sharing run data.
 
 ## License
 

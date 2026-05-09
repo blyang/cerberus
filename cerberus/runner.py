@@ -32,7 +32,7 @@ LIGHTHOUSE_FIXTURE_ESTIMATE_MS = 40_000  # mobile + desktop in parallel
 
 # Hard upper bound per check function. Lighthouse-dependent E checks just await the fixture, so
 # they finish quickly once it lands; the fixture itself has its own 180s subprocess timeout.
-# H3 is the longest with GSC + headless render: budget 90s.
+# H3 runs two parallel headless renders at networkidle (30s each, parallel), so 90s is generous.
 PER_CHECK_TIMEOUT_S = 90.0
 
 

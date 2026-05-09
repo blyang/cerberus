@@ -113,6 +113,39 @@ in `d_structured_data.py` for the canonical pattern). Two rules:
 - When LLM input is truncated, downgrade `fail` → `NEEDS_REVIEW`; the
   model only saw partial data and a hard FAIL would be misleading.
 
+## No public API returns Google-WRS-rendered HTML
+
+The GSC URL Inspection API does **not** return rendered HTML — its public
+schema (`UrlInspectionResult`) has no `liveInspectionResult` or
+`renderedPageInfo` field. H3 historically read those fields and silently
+fell through to MANUAL on every run. The Mobile-Friendly Test API used to
+expose `renderedHtml` but was deprecated 2023-12-04 with no replacement.
+PSI returns only a screenshot, not DOM. Don't reintroduce a "call Google
+for the rendered HTML" dependency — the only paths now are local headless
+Chromium (canonical: H3) or human paste from the GSC web UI.
+
+## Operator-override is gated to Manual / NEEDS_REVIEW
+
+`report.py` (`if marked and c["status"] in ("Manual", "Needs Review")`)
+only honors operator manual overrides on those two statuses. A check that
+auto-returns PASS (or FAIL) cannot be downgraded by the operator from the
+UI. Partly-automated checks where a human still wants the option to
+escalate (H3 since the GSC removal — the local Chromium simulation isn't
+WRS ground truth) must cap their best verdict at NEEDS_REVIEW. See the
+post-`from_substeps` cap in `h_serving.py` H3.
+
+## Bot-vs-user UA diffs: pin both UAs to the same Chrome version
+
+When diffing two browser renders that differ only by UA (the H3 pattern),
+both UAs must come from the same launched-browser Chrome version.
+Statically-versioned `UA_CHROME_DESKTOP` (Chrome/120) against a live
+Googlebot UA (Chrome/147) caused false content mismatches on sites with
+version-gated banners or compatibility shims. Use `browser.googlebot_wrs_ua()`
+and `browser.chrome_desktop_ua()` — both go through `_versioned_ua` and
+share the live Chrome version. The static `UA_CHROME_DESKTOP` constant is
+fine for raw httpx fetches (no rendering, no version-gated UI), which is
+what H1 still uses.
+
 ## Lighthouse details.items shape varies per audit
 
 Lighthouse audits in the SEO category emit `audit.details.items[*]` with at

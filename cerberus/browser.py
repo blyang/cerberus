@@ -3,9 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
-from .checks._utils import UnsafeTargetURL, validate_target_url
+from .checks._utils import (
+    UA_CHROME_DESKTOP_TEMPLATE,
+    UA_GOOGLEBOT_WRS_TEMPLATE,
+    UnsafeTargetURL,
+    validate_target_url,
+)
 
 log = logging.getLogger(__name__)
 
@@ -15,15 +21,31 @@ _browser: Any = None
 
 
 async def get_browser() -> Any:
-    """Acquire (or initialise) the shared Chromium browser. Cleans up partial state on failure."""
+    """Acquire (or initialise) the shared browser. Prefers stable Chrome channel
+    (matches Google's evergreen WRS) and falls back to bundled Chromium when Chrome
+    isn't installed. Cleans up partial state on failure."""
     global _playwright, _browser
     async with _browser_lock:
         if _browser is not None:
             return _browser
         from playwright.async_api import async_playwright
         pw = await async_playwright().start()
+        launch_args = {"headless": True, "args": ["--no-sandbox"]}
         try:
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            try:
+                browser = await pw.chromium.launch(channel="chrome", **launch_args)
+                channel = "chrome"
+            except Exception as exc:
+                log.warning(
+                    "browser: stable Chrome channel unavailable (%s); falling back to bundled Chromium. "
+                    "Run `playwright install chrome` for closer parity with Google's WRS.",
+                    exc,
+                )
+                browser = await pw.chromium.launch(**launch_args)
+                channel = "chromium-bundled"
+            # Stash the channel on the browser handle so it travels with the launched instance
+            # — avoids a parallel global that has to be reset in lockstep with _browser.
+            browser._cerberus_channel = channel
         except Exception:
             try:
                 await pw.stop()
@@ -33,6 +55,29 @@ async def get_browser() -> Any:
         _playwright = pw
         _browser = browser
         return _browser
+
+
+def _chrome_version_from(version_string: str) -> str:
+    """Extract the dotted Chrome version (e.g. '120.0.6099.71') from Browser.version()."""
+    m = re.search(r"\d+(?:\.\d+){2,3}", version_string or "")
+    return m.group(0) if m else "120.0.0.0"
+
+
+async def _versioned_ua(template: str) -> str:
+    browser = await get_browser()
+    return template.format(chrome_version=_chrome_version_from(browser.version))
+
+
+async def googlebot_wrs_ua() -> str:
+    """Googlebot WRS UA pinned to the live launched-browser Chrome version (matches Google's
+    evergreen WRS shape: Chrome-versioned compatible token)."""
+    return await _versioned_ua(UA_GOOGLEBOT_WRS_TEMPLATE)
+
+
+async def chrome_desktop_ua() -> str:
+    """Desktop Chrome UA pinned to the live launched-browser Chrome version. Pair with
+    googlebot_wrs_ua() so bot-vs-user diffs aren't confounded by Chrome-version skew."""
+    return await _versioned_ua(UA_CHROME_DESKTOP_TEMPLATE)
 
 
 async def render_page(url: str, user_agent: str | None = None, viewport: dict | None = None, wait_until: str = "networkidle") -> dict:
@@ -170,3 +215,9 @@ async def shutdown() -> None:
         except Exception:
             pass
         _playwright = None
+
+
+def get_channel_used() -> str | None:
+    """Return the launch channel of the shared browser ('chrome' or 'chromium-bundled'),
+    or None if no browser has been launched yet."""
+    return getattr(_browser, "_cerberus_channel", None) if _browser is not None else None

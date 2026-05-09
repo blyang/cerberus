@@ -199,8 +199,8 @@ def render_markdown(run: dict[str, Any], checks: list[dict[str, Any]],
     for c in checks:
         # Apply operator's manual override on top of the auto-result. The override applies to
         # checks parked in either Manual (pure-manual checks like A2/C7/E4 when vision is off)
-        # or Needs Review (partly-automated checks like D3 step 5 / H3 where the operator made
-        # the final call). Auto-classified Pass/Fail are not overridable from the UI.
+        # or Needs Review (partly-automated checks like D3 step 5 where the operator made the
+        # final call). Auto-classified Pass/Fail are not overridable from the UI.
         # Preserve the original status in details so _render_check can label the override
         # ("Pass (operator-marked, was: Manual)") instead of silently rewriting.
         marked = manual_toggles.get(c["check_id"])

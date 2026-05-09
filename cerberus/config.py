@@ -52,7 +52,6 @@ class SiteConfig:
     raw: dict
     hosts: dict[str, dict]
     defaults: dict
-    gsc_credentials_path: str | None
     default_url: str | None
     vision: VisionConfig | None = None
 
@@ -97,14 +96,13 @@ def _infer_apex(host: str) -> str | None:
 def load(path: Path | None = None) -> SiteConfig:
     p = path or CONFIG_PATH
     if not p.exists():
-        return SiteConfig(raw={}, hosts={}, defaults={}, gsc_credentials_path=None, default_url=None)
+        return SiteConfig(raw={}, hosts={}, defaults={}, default_url=None)
     raw = yaml.safe_load(p.read_text()) or {}
     hosts = {k.lower(): v for k, v in (raw.get("hosts") or {}).items()}
     return SiteConfig(
         raw=raw,
         hosts=hosts,
         defaults=raw.get("defaults") or {},
-        gsc_credentials_path=raw.get("gsc_credentials_path"),
         default_url=raw.get("default_url"),
         vision=_parse_vision(raw.get("vision")),
     )

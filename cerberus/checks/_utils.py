@@ -18,10 +18,22 @@ from bs4 import BeautifulSoup
 from .base import CheckContext
 
 # UA strings used throughout. Real Googlebot UA per Google's published guidance.
-UA_CHROME_DESKTOP = (
+# Render-simulation UA templates (Chrome-versioned). Use these via the browser module helpers
+# so the version is pinned to the actual launched Chromium/Chrome — keeping both ends of any
+# bot-vs-user comparison on the same Chrome version, which avoids false diffs from
+# version-gated UI banners or compatibility shims.
+UA_CHROME_DESKTOP_TEMPLATE = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36"
 )
+UA_GOOGLEBOT_WRS_TEMPLATE = (
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; "
+    "Googlebot/2.1; +http://www.google.com/bot.html) "
+    "Chrome/{chrome_version} Safari/537.36"
+)
+# Static UAs derived from the templates. Static callers (httpx fetches in H1) want a stable
+# UA value; render callers (H3) want the live Chrome version via the browser module helpers.
+UA_CHROME_DESKTOP = UA_CHROME_DESKTOP_TEMPLATE.format(chrome_version="120.0.0.0")
 UA_CHROME_MOBILE = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
