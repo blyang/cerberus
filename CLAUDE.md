@@ -59,6 +59,19 @@ passes by accident. Use the BS4 helpers in `cerberus/checks/_utils.py`
 `collect_insecure_urls`); add siblings there, don't inline. E6/E7/F3 each
 had this bug class until they were converted.
 
+## render_page redirects are NOT validated per-hop (deliberate)
+
+`_fetch` (httpx path) walks redirects manually and re-runs `validate_target_url`
+on every Location target. `render_page` (Playwright path) validates only the
+initial URL and lets Chromium follow redirects natively. This asymmetry is
+**deliberate** under cerberus's first-party-only threat model: pages cerberus
+audits are produced internally by Strikingly, so a UA-conditional redirect to
+a private IP would require either insider compromise or a config-bug accident
+— neither in scope for this tool. Don't "fix" the asymmetry without first
+confirming the threat model has expanded (e.g., to user-published Strikingly
+sites or external benchmarking targets). If it has, intercept via Playwright
+`context.route("**/*", ...)` and call `validate_target_url` per request.
+
 ## Asserting redirects: validate Location, not just status
 
 `status_code in (301, 308)` is necessary, not sufficient — a 301 to the wrong
