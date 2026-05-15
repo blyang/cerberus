@@ -13,10 +13,23 @@ import shutil
 import tempfile
 from typing import Any
 
+import httpx
+
+from .config import LighthouseConfig
+
 log = logging.getLogger(__name__)
 
 # Key on CheckContext.cache where the fixture future/result lives.
 FIXTURE_KEY = "lighthouse_fixture"
+
+# PageSpeed Insights API: runs Lighthouse on Google's infra (matches pagespeed.web.dev).
+# One call per strategy; target URL must be publicly reachable by Google.
+PSI_ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
+# Total must stay under runner.PER_CHECK_TIMEOUT_S (90s): the E-checks await this
+# fixture inside their own per-check budget, so a longer PSI ceiling would just
+# surface as a check timeout instead of a clean per-device error.
+PSI_TIMEOUT = httpx.Timeout(75.0, connect=10.0)
+PSI_CATEGORIES = ("performance", "seo", "accessibility", "best-practices")
 
 
 def _lighthouse_bin() -> str | None:
@@ -203,13 +216,83 @@ def _extract(report: dict) -> dict[str, Any]:
     }
 
 
-async def build_fixture(url: str) -> dict[str, Any]:
-    """Run mobile + desktop concurrently. Returns {mobile, desktop} dicts.
+async def _psi_run(client: httpx.AsyncClient, url: str, device: str, api_key: str | None) -> dict[str, Any]:
+    """One PSI API call for one strategy. Returns parsed fixture dict or {error}.
+
+    PSI's `lighthouseResult` field IS a Lighthouse report, so it feeds straight
+    into `_extract` — the same shape the local CLI path produces.
+    """
+    params: list[tuple[str, str]] = [("url", url), ("strategy", device)]
+    params += [("category", c) for c in PSI_CATEGORIES]
+    if api_key:
+        params.append(("key", api_key))
+    try:
+        resp = await client.get(PSI_ENDPOINT, params=params)
+    except httpx.HTTPError as exc:
+        return {"error": f"PSI request failed ({device}): {type(exc).__name__}: {exc}"}
+    if resp.status_code != 200:
+        msg = ""
+        try:
+            msg = (resp.json().get("error") or {}).get("message") or ""
+        except Exception:
+            msg = (resp.text or "")[:200]
+        return {"error": f"PSI HTTP {resp.status_code} ({device}): {msg}".strip()}
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        return {"error": f"PSI returned unparseable JSON ({device}): {exc}"}
+    lhr = payload.get("lighthouseResult")
+    if not isinstance(lhr, dict):
+        return {"error": f"PSI response missing lighthouseResult ({device})"}
+    runtime_err = lhr.get("runtimeError")
+    if isinstance(runtime_err, dict) and runtime_err.get("code"):
+        return {"error": f"PSI runtime error ({device}): {runtime_err.get('code')} "
+                         f"{runtime_err.get('message', '')}".strip()}
+    return _extract(lhr)
+
+
+async def _build_fixture_psi(url: str, api_key: str | None) -> dict[str, Any]:
+    """Fetch the fixture from the PageSpeed Insights API (mobile + desktop concurrently)."""
+    # Validate before forwarding the URL to Google — keeps the PSI path consistent
+    # with the local `_run` path's SSRF guard rather than silently exempting it.
+    from .checks._utils import UnsafeTargetURL, validate_target_url
+    try:
+        await validate_target_url(url)
+    except UnsafeTargetURL as exc:
+        err = {"error": f"unsafe target: {exc}"}
+        return {"mobile": dict(err), "desktop": dict(err)}
+    log.info("lighthouse: fetching PSI fixture for %s (api key: %s)",
+             url, "set" if api_key else "none — expect tight rate limits")
+    async with httpx.AsyncClient(timeout=PSI_TIMEOUT) as client:
+        mobile, desktop = await asyncio.gather(
+            _psi_run(client, url, "mobile", api_key),
+            _psi_run(client, url, "desktop", api_key),
+        )
+    return {"mobile": mobile, "desktop": desktop}
+
+
+async def _build_fixture_local(url: str) -> dict[str, Any]:
+    """Run the local `lighthouse` CLI for mobile + desktop concurrently.
 
     Each device spawns its own Chromium subprocess (Lighthouse picks a free debug port per run),
     so they don't conflict. Wall-clock for the fixture drops from ~mobile+desktop to ~max(mobile, desktop).
     Expect a CPU spike for the duration since both Chromium processes run simultaneously.
     """
-    log.info("lighthouse: starting parallel fixture for %s", url)
+    log.info("lighthouse: starting parallel local fixture for %s", url)
     mobile, desktop = await asyncio.gather(_run(url, "mobile"), _run(url, "desktop"))
     return {"mobile": mobile, "desktop": desktop}
+
+
+async def build_fixture(url: str, lh_config: LighthouseConfig | None = None) -> dict[str, Any]:
+    """Build the {mobile, desktop} performance fixture consumed by checks E1–E3b.
+
+    Source is chosen by `lh_config.source`: "psi" (PageSpeed Insights API) or
+    "local" (local lighthouse CLI). Defaults to local when no config is passed.
+    Each device value is either parsed metrics/scores/seo_audits or {"error": ...};
+    the E-checks already degrade gracefully on the error shape.
+    """
+    lh_config = lh_config or LighthouseConfig()
+    if lh_config.source == "psi":
+        api_key = os.environ.get(lh_config.psi_api_key_env, "").strip() or None
+        return await _build_fixture_psi(url, api_key)
+    return await _build_fixture_local(url)

@@ -173,7 +173,7 @@ class RunManager:
                     {"name": "lighthouse", "estimate_ms": LIGHTHOUSE_FIXTURE_ESTIMATE_MS},
                 )
             )
-            lh_task = asyncio.create_task(build_fixture(url))
+            lh_task = asyncio.create_task(build_fixture(url, site_config.lighthouse))
             ctx.cache[FIXTURE_KEY] = lh_task  # checks await this
 
         sem = asyncio.Semaphore(HTTP_CONCURRENCY)

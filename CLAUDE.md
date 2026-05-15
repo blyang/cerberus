@@ -178,3 +178,27 @@ More" — the actual non-descriptive text), and `is-crawlable` renders as a
 Python dict repr. Dispatch by shape (see `_format_audit_item` in
 `cerberus/lighthouse.py`) — and verify against a real fixture, not the
 schema docs.
+
+## Lighthouse fixture: PSI vs local CLI
+
+`build_fixture` (the data source for E1–E3b) has two backends, picked by
+`site_config.yaml`'s `lighthouse.source`:
+
+- `local` — `lighthouse` CLI subprocess; works on any URL but scores swing
+  with this host's CPU load.
+- `psi` — PageSpeed Insights API; scores match pagespeed.web.dev, but the URL
+  must be **publicly reachable**. preprod/internal/local URLs fail: the PSI
+  path runs `validate_target_url`, which rejects private/internal hosts before
+  the request is sent. The committed config ships `source: psi` while
+  `default_url` is a preprod host — auditing that default under PSI fails
+  every E-check until you point at a public URL or switch to `local`.
+
+Two coupling constraints when touching this code:
+
+- `_extract()` parses **both** the local CLI's report JSON and PSI's
+  `lighthouseResult` field — they're schema-identical, so a change made for
+  one path silently affects the other.
+- `PSI_TIMEOUT` must stay under `runner.PER_CHECK_TIMEOUT_S` (90s). The
+  E-checks await the fixture inside their own per-check budget, so a longer
+  PSI ceiling just surfaces as a check timeout instead of a clean per-device
+  error.

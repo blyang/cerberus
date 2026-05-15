@@ -63,6 +63,16 @@ defaults:
 # Default URL pre-filled in the input field.
 default_url: https://www.preprod.strikingly.com/s/ai_site_builder
 
+# Source for the E-section performance fixture (checks E1–E3b).
+#   psi   — PageSpeed Insights API. Runs Lighthouse on Google's infrastructure, so
+#           scores match pagespeed.web.dev. The audited URL must be publicly
+#           reachable. Set PSI_API_KEY in .env to avoid keyless rate limits.
+#   local — local `lighthouse` CLI subprocess. Works offline / on private hosts,
+#           but scores are sensitive to this machine's CPU load.
+lighthouse:
+  source: psi
+  psi_api_key_env: PSI_API_KEY
+
 # Vision LLM config — auto-classifies the previously-manual checks A2, C7, E4.
 # Disable by setting enabled: false to fall back to manual instructions in the report.
 vision:

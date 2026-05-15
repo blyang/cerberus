@@ -48,12 +48,26 @@ class VisionConfig:
 
 
 @dataclasses.dataclass
+class LighthouseConfig:
+    """Source for the E-section performance fixture (E1–E3b).
+
+    `source="psi"` runs Lighthouse on Google's PageSpeed Insights infrastructure —
+    numbers match pagespeed.web.dev, but the URL must be publicly reachable.
+    `source="local"` shells out to the local `lighthouse` CLI: works offline /
+    on private hosts, but scores are sensitive to this machine's CPU load.
+    """
+    source: str = "local"  # "local" | "psi"
+    psi_api_key_env: str = "PSI_API_KEY"
+
+
+@dataclasses.dataclass
 class SiteConfig:
     raw: dict
     hosts: dict[str, dict]
     defaults: dict
     default_url: str | None
     vision: VisionConfig | None = None
+    lighthouse: LighthouseConfig = dataclasses.field(default_factory=LighthouseConfig)
 
     def for_url(self, url: str) -> HostConfig:
         host = urlparse(url).hostname or ""
@@ -105,6 +119,19 @@ def load(path: Path | None = None) -> SiteConfig:
         defaults=raw.get("defaults") or {},
         default_url=raw.get("default_url"),
         vision=_parse_vision(raw.get("vision")),
+        lighthouse=_parse_lighthouse(raw.get("lighthouse")),
+    )
+
+
+def _parse_lighthouse(d: dict | None) -> LighthouseConfig:
+    if not d:
+        return LighthouseConfig()
+    source = str(d.get("source") or "local").lower()
+    if source not in ("local", "psi"):
+        source = "local"
+    return LighthouseConfig(
+        source=source,
+        psi_api_key_env=str(d.get("psi_api_key_env") or "PSI_API_KEY"),
     )
 
 
