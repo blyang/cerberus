@@ -378,17 +378,12 @@ async def e4(ctx: CheckContext) -> CheckResult:
     small_count = dom_signals.get("small_text_count") or 0
     if min_font is None:
         # Extraction failed / no visible text measured — don't certify the body-text size.
-        sub.append(SubStep(
-            "Body text ≥ 12px (footnotes/legal exception allowed)",
-            Status.NEEDS_REVIEW,
-            detail="could not measure rendered font sizes (no visible text nodes or evaluate failed)",
-        ))
+        font_status = Status.NEEDS_REVIEW
+        font_detail = "could not measure rendered font sizes (no visible text nodes or evaluate failed)"
     else:
-        sub.append(SubStep(
-            "Body text ≥ 12px (footnotes/legal exception allowed)",
-            Status.PASS if (min_font >= 12 or small_count <= 5) else Status.FAIL,
-            detail=f"min font: {min_font}px; nodes < 12px: {small_count}",
-        ))
+        font_status = Status.PASS if (min_font >= 12 or small_count <= 5) else Status.FAIL
+        font_detail = f"min font: {min_font}px; nodes < 12px: {small_count}"
+    sub.append(SubStep("Body text ≥ 12px (footnotes/legal exception allowed)", font_status, detail=font_detail))
 
     # Vision sub-step: layout/overlap.
     if not vcfg or not vcfg.enabled:

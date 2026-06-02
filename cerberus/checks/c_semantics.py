@@ -77,40 +77,33 @@ def _accessible_text(el) -> str:
           title="All form inputs have associated <label> elements", estimate_ms=2_000)
 async def c4(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
-    inputs = r.soup.find_all(["input", "textarea", "select"])
+    soup = r.soup
+    inputs = soup.find_all(["input", "textarea", "select"])
     if not inputs:
         return CheckResult(Status.NA, summary="No form inputs on page.")
-    soup = r.soup
     unmatched: list[str] = []   # no labeling mechanism at all
     broken: list[str] = []      # mechanism present but empty / dangling reference
     for inp in inputs:
         if (inp.get("type") or "").lower() in ("hidden", "submit", "button", "image", "reset"):
             continue
-        if (inp.get("aria-label") or "").strip():
-            continue
-        labelledby = (inp.get("aria-labelledby") or "").strip()
-        if labelledby:
-            # The accessible name is the concatenation of every resolvable referenced node's
-            # text; a missing id just contributes nothing. So the control is only unlabelled
-            # when NO referenced id resolves to text (`aria-labelledby="missing-id"`, or all
-            # refs empty). A partially-dangling list that still has one real label is fine.
-            refs = [soup.find(id=tok) for tok in labelledby.split()]
-            if not any(_accessible_text(ref) for ref in refs):
-                broken.append(str(inp)[:120])
-            continue
-        wrapping = next((par for par in inp.parents if par.name == "label"), None)
-        if wrapping is not None:
-            if not _accessible_text(wrapping):
-                broken.append(str(inp)[:120])
-            continue
-        inp_id = inp.get("id")
-        if inp_id:
-            lbl = soup.find("label", attrs={"for": inp_id})
-            if lbl is not None:
-                if not _accessible_text(lbl):
-                    broken.append(str(inp)[:120])
-                continue
-        unmatched.append(str(inp)[:120])
+        # Resolve the label source in precedence order. `name` stays None when no mechanism is
+        # present at all (-> unmatched); "" when a mechanism resolves to no accessible text
+        # (-> broken, e.g. `aria-labelledby="missing-id"` or an empty <label>); non-empty when
+        # properly labelled. aria-labelledby concatenates every resolvable ref, so a partially
+        # dangling list that still has one real label resolves fine.
+        name: str | None = None
+        if (aria := (inp.get("aria-label") or "").strip()):
+            name = aria
+        elif (labelledby := (inp.get("aria-labelledby") or "").strip()):
+            name = " ".join(_accessible_text(soup.find(id=tok)) for tok in labelledby.split()).strip()
+        elif (wrapping := next((par for par in inp.parents if par.name == "label"), None)) is not None:
+            name = _accessible_text(wrapping)
+        elif (inp_id := inp.get("id")) and (lbl := soup.find("label", attrs={"for": inp_id})) is not None:
+            name = _accessible_text(lbl)
+        if name is None:
+            unmatched.append(str(inp)[:120])
+        elif not name:
+            broken.append(str(inp)[:120])
     sub = [
         SubStep(
             "Every input has a labeling mechanism",

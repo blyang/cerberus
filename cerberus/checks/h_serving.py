@@ -62,8 +62,8 @@ async def h1(ctx: CheckContext) -> CheckResult:
     # Heading-set overlap: a small cloaked heading swap can be diluted below the bulk-text
     # threshold, so compare the h1–h3 sets directly. Jaccard, NEEDS_REVIEW on divergence.
     def _headings(soup) -> set[str]:
-        return {h.get_text(strip=True).casefold()
-                for h in soup.find_all(["h1", "h2", "h3"]) if h.get_text(strip=True)}
+        return {t.casefold() for h in soup.find_all(["h1", "h2", "h3"])
+                if (t := h.get_text(strip=True))}
     bot_h, user_h = _headings(bot.soup), _headings(user.soup)
     union = bot_h | user_h
     jac = len(bot_h & user_h) / len(union) if union else 1.0
