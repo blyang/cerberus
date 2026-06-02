@@ -124,6 +124,11 @@ _HIDDEN_TEXT_JS = """
     if (['SCRIPT','STYLE','NOSCRIPT'].includes(el.tagName)) continue;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;  // legit-UI, skip
+    // display:none isn't inherited in computed style, so a node inside an ancestor-collapsed
+    // menu/tab still reads display:block here. getClientRects() is empty when any ancestor is
+    // display:none (or the node is detached) but non-empty for genuinely-cloaked text (off-screen
+    // text-indent, 1px font, white-on-white all still lay out) — so it excludes collapsed UI only.
+    if (el.getClientRects().length === 0) continue;
     let reason = null;
     const fs = parseFloat(cs.fontSize || '0');
     const ti = parseFloat(cs.textIndent || '0');
