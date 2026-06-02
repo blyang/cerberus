@@ -97,15 +97,22 @@ _HIDDEN_TEXT_JS = """
     return m.slice(0, 3).map(Number);
   };
   const near = (a, b) => a && b && (Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]) + Math.abs(a[2]-b[2])) < 30;
-  // Effective background = nearest ancestor with an opaque background; white if none (canvas default).
-  const effectiveBg = el => {
+  // Whether `color` matches the effective background: walk ancestors for the first opaque
+  // background-color. Bail (return false) if any ancestor paints a background-image/gradient
+  // before an opaque color is found — the visible backdrop is then an image we can't sample,
+  // so light-text-over-hero is NOT white-on-white. White is assumed only as the canvas default.
+  const colorMatchesBg = el => {
+    const col = parse(getComputedStyle(el).color);
+    if (!col) return false;
     let p = el;
     while (p && p.nodeType === 1) {
-      const c = parse(getComputedStyle(p).backgroundColor);
-      if (c) return c;
+      const pcs = getComputedStyle(p);
+      if (pcs.backgroundImage && pcs.backgroundImage !== 'none') return false;
+      const c = parse(pcs.backgroundColor);
+      if (c) return near(col, c);
       p = p.parentElement;
     }
-    return [255, 255, 255];
+    return near(col, [255, 255, 255]);
   };
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
   let node; const seen = new Set();
@@ -122,7 +129,7 @@ _HIDDEN_TEXT_JS = """
     const ti = parseFloat(cs.textIndent || '0');
     if (fs > 0 && fs <= 1) reason = 'font-size<=1px';
     else if (ti <= -1000) reason = 'text-indent off-screen';
-    else if (near(parse(cs.color), effectiveBg(el))) reason = 'text color matches background';
+    else if (colorMatchesBg(el)) reason = 'text color matches background';
     if (reason) { seen.add(el); out.push({reason, sample: t.slice(0, 80)}); if (out.length >= 20) break; }
   }
   return out;

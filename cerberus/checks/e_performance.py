@@ -337,10 +337,11 @@ async def e4(ctx: CheckContext) -> CheckResult:
                         if (['SCRIPT','STYLE','NOSCRIPT'].includes(el.tagName)) continue;
                         const cs = getComputedStyle(el);
                         // Skip hidden text — a hidden 8px node shouldn't fail (or pass) the
-                        // visible-body-text check.
+                        // visible-body-text check. (Element-level only: offsetParent is null
+                        // for visible body-level / display:contents text too, so don't use it
+                        // as a visibility proxy — it would drop real copy and stall the check.)
                         if (cs.display === 'none' || cs.visibility === 'hidden') continue;
                         if (parseFloat(cs.opacity || '1') === 0) continue;
-                        if (el.offsetParent === null && cs.position !== 'fixed') continue;
                         const fs = parseFloat(cs.fontSize || '0');
                         if (fs > 0) out.push(fs);
                       }
