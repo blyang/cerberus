@@ -75,11 +75,12 @@ async def c4(ctx: CheckContext) -> CheckResult:
             continue
         labelledby = (inp.get("aria-labelledby") or "").strip()
         if labelledby:
-            # Every referenced id must exist, and at least one must carry non-empty text —
-            # `aria-labelledby="missing-id"` or refs to empty nodes leave the control unlabelled.
+            # The accessible name is the concatenation of every resolvable referenced node's
+            # text; a missing id just contributes nothing. So the control is only unlabelled
+            # when NO referenced id resolves to text (`aria-labelledby="missing-id"`, or all
+            # refs empty). A partially-dangling list that still has one real label is fine.
             refs = [soup.find(id=tok) for tok in labelledby.split()]
-            if any(ref is None for ref in refs) or not any(
-                    (ref.get_text(strip=True) if ref else "") for ref in refs):
+            if not any((ref.get_text(strip=True) if ref else "") for ref in refs):
                 broken.append(str(inp)[:120])
             continue
         wrapping = next((par for par in inp.parents if par.name == "label"), None)
@@ -114,7 +115,8 @@ async def c4(ctx: CheckContext) -> CheckResult:
 
 # Filenames that signal a decorative/spacer image, where empty alt is correct.
 _DECORATIVE_NAME_RE = re.compile(
-    r"(spacer|blank|pixel|1x1|transparent|separator|divider|placeholder|clear|shim)", re.I)
+    r"(spacer|blank|pixel|1x1|transparent|separator|divider|placeholder|clear|shim"
+    r"|icon|arrow|bullet|chevron|caret|sprite|swatch)", re.I)
 
 
 def _img_is_informative(img) -> bool:

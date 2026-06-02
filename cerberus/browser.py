@@ -87,9 +87,26 @@ async def chrome_desktop_ua() -> str:
 _HIDDEN_TEXT_JS = """
 () => {
   const out = [];
-  const rgb = s => { const m = (s || '').match(/\\d+(\\.\\d+)?/g); return m ? m.slice(0, 3).map(Number) : null; };
+  // Alpha-aware: a fully-transparent color (alpha 0, incl. the default 'rgba(0,0,0,0)') is
+  // NOT an opaque [0,0,0] — return null so we keep looking up the stack. Without this, a page
+  // with a default transparent <body> reads as black background and ALL black text flags.
+  const parse = s => {
+    const m = (s || '').match(/[\\d.]+/g);
+    if (!m) return null;
+    if (m.length >= 4 && Number(m[3]) === 0) return null;
+    return m.slice(0, 3).map(Number);
+  };
   const near = (a, b) => a && b && (Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]) + Math.abs(a[2]-b[2])) < 30;
-  const bodyBg = rgb(getComputedStyle(document.body).backgroundColor) || [255, 255, 255];
+  // Effective background = nearest ancestor with an opaque background; white if none (canvas default).
+  const effectiveBg = el => {
+    let p = el;
+    while (p && p.nodeType === 1) {
+      const c = parse(getComputedStyle(p).backgroundColor);
+      if (c) return c;
+      p = p.parentElement;
+    }
+    return [255, 255, 255];
+  };
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
   let node; const seen = new Set();
   while ((node = walker.nextNode())) {
@@ -105,11 +122,7 @@ _HIDDEN_TEXT_JS = """
     const ti = parseFloat(cs.textIndent || '0');
     if (fs > 0 && fs <= 1) reason = 'font-size<=1px';
     else if (ti <= -1000) reason = 'text-indent off-screen';
-    else {
-      let bg = rgb(cs.backgroundColor);
-      if (!bg || cs.backgroundColor === 'rgba(0, 0, 0, 0)' || cs.backgroundColor === 'transparent') bg = bodyBg;
-      if (near(rgb(cs.color), bg)) reason = 'text color matches background';
-    }
+    else if (near(parse(cs.color), effectiveBg(el))) reason = 'text color matches background';
     if (reason) { seen.add(el); out.push({reason, sample: t.slice(0, 80)}); if (out.length >= 20) break; }
   }
   return out;
