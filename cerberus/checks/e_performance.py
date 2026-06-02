@@ -335,10 +335,19 @@ async def e4(ctx: CheckContext) -> CheckResult:
                         const el = node.parentElement;
                         if (!el) continue;
                         if (['SCRIPT','STYLE','NOSCRIPT'].includes(el.tagName)) continue;
-                        const fs = parseFloat(getComputedStyle(el).fontSize || '0');
+                        const cs = getComputedStyle(el);
+                        // Skip hidden text — a hidden 8px node shouldn't fail (or pass) the
+                        // visible-body-text check.
+                        if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+                        if (parseFloat(cs.opacity || '1') === 0) continue;
+                        if (el.offsetParent === null && cs.position !== 'fixed') continue;
+                        const fs = parseFloat(cs.fontSize || '0');
                         if (fs > 0) out.push(fs);
                       }
-                      return {min: Math.min(...out), small_count: out.filter(f => f < 12).length, total: out.length};
+                      // null (not Infinity) when nothing measurable, so the check can tell
+                      // "extraction failed" apart from "measured and fine".
+                      return {min: out.length ? Math.min(...out) : null,
+                              small_count: out.filter(f => f < 12).length, total: out.length};
                     }
                     """
                 )
@@ -366,11 +375,19 @@ async def e4(ctx: CheckContext) -> CheckResult:
     ))
     min_font = dom_signals.get("min_font_px")
     small_count = dom_signals.get("small_text_count") or 0
-    sub.append(SubStep(
-        "Body text ≥ 12px (footnotes/legal exception allowed)",
-        Status.PASS if (min_font is None or min_font >= 12 or small_count <= 5) else Status.FAIL,
-        detail=f"min font: {min_font}px; nodes < 12px: {small_count}",
-    ))
+    if min_font is None:
+        # Extraction failed / no visible text measured — don't certify the body-text size.
+        sub.append(SubStep(
+            "Body text ≥ 12px (footnotes/legal exception allowed)",
+            Status.NEEDS_REVIEW,
+            detail="could not measure rendered font sizes (no visible text nodes or evaluate failed)",
+        ))
+    else:
+        sub.append(SubStep(
+            "Body text ≥ 12px (footnotes/legal exception allowed)",
+            Status.PASS if (min_font >= 12 or small_count <= 5) else Status.FAIL,
+            detail=f"min font: {min_font}px; nodes < 12px: {small_count}",
+        ))
 
     # Vision sub-step: layout/overlap.
     if not vcfg or not vcfg.enabled:
