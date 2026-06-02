@@ -202,3 +202,50 @@ Two coupling constraints when touching this code:
   E-checks await the fixture inside their own per-check budget, so a longer
   PSI ceiling just surfaces as a check timeout instead of a clean per-device
   error.
+
+## Adding a URL section needs TWO config edits (F1/F10 + F5)
+
+A site "section" (e.g. `/generators/`) is routed by two independent fields
+in `site_config.yaml`, and a section usually needs **both**:
+
+- `pipeline_url_prefixes` — F5 picks the longest matching prefix to build
+  its nonexistent-URL probe *in that section* (so a `/generators/` page
+  probes `/generators/...`, not the `/s/` subsystem that 301s).
+- `section_sitemaps` (`prefix → sitemap`) — F1/F10 follow the audited URL
+  into the sitemap that actually owns it (`sitemap_url` is the catch-all).
+
+Both go through `HostConfig._longest_matching_prefix`. Listing a section in
+only one field is silently half-wired: a `section_sitemaps` key with no
+matching `pipeline_url_prefixes` entry makes F5 return NEEDS_REVIEW for that
+section with no signal the config is incomplete. (The single-`sections`-table
+refactor that would remove this two-place invariant is deferred until a 2nd
+host or 3rd section exists — don't build it for one host.)
+
+## F4 challenge markers: interstitial vs widget is load-bearing
+
+F4 splits challenge markers into two classes and they are **not**
+interchangeable — collapsing them reintroduces a false-pass:
+
+- **Interstitial** (`cf-challenge`, `challenge-platform`): never appear on a
+  real content page. If the bot sees one it's a block, *even if the normal
+  user sees it too* — a shared interstitial means the whole site is
+  challenge-walled and Googlebot is still starved. So these fail on bot
+  presence alone.
+- **Widget** (`captcha`, `are you human`): legitimately ship inline on normal
+  pages (embedded reCAPTCHA/hCAPTCHA). These only signal a block under the
+  cloak *asymmetry* — bot sees them, a normal user does not. Shared == fine.
+
+The naive "fail only on bot-vs-user asymmetry for all markers" was a codex
+finding: it false-passed an everyone-blocked interstitial. Never put a bare
+`/cdn-cgi/` in the marker list — it's on every Cloudflare-fronted page
+(Rocket Loader/analytics), so it shows up for the normal user too and
+corrupts the diff; `challenge-platform` already covers the challenge path.
+
+## A check's registered title must not overclaim its code
+
+The `title=` in `@register(...)` is the operator-facing assertion. Keep it to
+what the code actually verifies. C5's title was briefly "All meaningful images
+have descriptive alt attributes" while the code only checks `alt`-attribute
+*presence* — that reads PASS as "alt text is good" when it isn't. If you want
+the stronger title, upgrade the check first (C5 is an open false-pass item in
+`audit-fix-plan.md`); don't let the title get ahead of the logic.
