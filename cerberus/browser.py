@@ -80,8 +80,48 @@ async def chrome_desktop_ua() -> str:
     return await _versioned_ua(UA_CHROME_DESKTOP_TEMPLATE)
 
 
-async def render_page(url: str, user_agent: str | None = None, viewport: dict | None = None, wait_until: str = "networkidle") -> dict:
-    """Returns {url, status, html, text, error?}. Validates URL before launching a context."""
+# Detects text rendered with classic SEO-cloaking style signatures via *computed* style —
+# white-on-white, off-screen text-indent, or sub-1px font. Deliberately NOT display:none /
+# visibility:hidden (those dominate legit UI: menus, tabs, accordions, sr-only) so H2 stays
+# low-false-positive. Returns up to 20 {reason, sample} records.
+_HIDDEN_TEXT_JS = """
+() => {
+  const out = [];
+  const rgb = s => { const m = (s || '').match(/\\d+(\\.\\d+)?/g); return m ? m.slice(0, 3).map(Number) : null; };
+  const near = (a, b) => a && b && (Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]) + Math.abs(a[2]-b[2])) < 30;
+  const bodyBg = rgb(getComputedStyle(document.body).backgroundColor) || [255, 255, 255];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+  let node; const seen = new Set();
+  while ((node = walker.nextNode())) {
+    const t = (node.textContent || '').trim();
+    if (t.length < 25) continue;
+    const el = node.parentElement;
+    if (!el || seen.has(el)) continue;
+    if (['SCRIPT','STYLE','NOSCRIPT'].includes(el.tagName)) continue;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') continue;  // legit-UI, skip
+    let reason = null;
+    const fs = parseFloat(cs.fontSize || '0');
+    const ti = parseFloat(cs.textIndent || '0');
+    if (fs > 0 && fs <= 1) reason = 'font-size<=1px';
+    else if (ti <= -1000) reason = 'text-indent off-screen';
+    else {
+      let bg = rgb(cs.backgroundColor);
+      if (!bg || cs.backgroundColor === 'rgba(0, 0, 0, 0)' || cs.backgroundColor === 'transparent') bg = bodyBg;
+      if (near(rgb(cs.color), bg)) reason = 'text color matches background';
+    }
+    if (reason) { seen.add(el); out.push({reason, sample: t.slice(0, 80)}); if (out.length >= 20) break; }
+  }
+  return out;
+}
+"""
+
+
+async def render_page(url: str, user_agent: str | None = None, viewport: dict | None = None,
+                      wait_until: str = "networkidle", collect_hidden: bool = False) -> dict:
+    """Returns {url, status, html, text, error?}. Validates URL before launching a context.
+    With collect_hidden=True, also returns `hidden`: a list of computed-style-cloaked text
+    blocks (see _HIDDEN_TEXT_JS) found on the same render — no extra page load."""
     try:
         await validate_target_url(url)
     except UnsafeTargetURL as exc:
@@ -102,7 +142,13 @@ async def render_page(url: str, user_agent: str | None = None, viewport: dict | 
                 text = await page.evaluate("() => (document.querySelector('main, article') || document.body || {innerText: ''}).innerText")
             except Exception:
                 text = ""
-            return {"url": url, "status": status, "html": html, "text": text or ""}
+            result = {"url": url, "status": status, "html": html, "text": text or ""}
+            if collect_hidden:
+                try:
+                    result["hidden"] = await page.evaluate(_HIDDEN_TEXT_JS)
+                except Exception:
+                    result["hidden"] = []
+            return result
         finally:
             await ctx.close()
     except Exception as exc:

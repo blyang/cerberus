@@ -59,6 +59,14 @@ async def h1(ctx: CheckContext) -> CheckResult:
         return CheckResult(Status.FAIL, summary="Empty <main>/<article> in one variant.",
                            details={"bot_text_len": len(bot_text), "user_text_len": len(user_text)})
     sim = _similarity(bot_text, user_text)
+    # Heading-set overlap: a small cloaked heading swap can be diluted below the bulk-text
+    # threshold, so compare the h1–h3 sets directly. Jaccard, NEEDS_REVIEW on divergence.
+    def _headings(soup) -> set[str]:
+        return {h.get_text(strip=True).casefold()
+                for h in soup.find_all(["h1", "h2", "h3"]) if h.get_text(strip=True)}
+    bot_h, user_h = _headings(bot.soup), _headings(user.soup)
+    union = bot_h | user_h
+    jac = len(bot_h & user_h) / len(union) if union else 1.0
     sub = [
         SubStep("bot.html has primary content", Status.PASS if bot_text else Status.FAIL,
                 detail=f"len: {len(bot_text)}"),
@@ -69,6 +77,11 @@ async def h1(ctx: CheckContext) -> CheckResult:
             Status.PASS if sim >= 0.90 else (Status.NEEDS_REVIEW if sim >= 0.75 else Status.FAIL),
             detail=f"similarity: {sim:.3f}",
         ),
+        SubStep(
+            "Bot vs. user headings match",
+            Status.PASS if jac >= 0.8 else Status.NEEDS_REVIEW,
+            detail=f"heading Jaccard={jac:.2f}; bot={len(bot_h)} user={len(user_h)} shared={len(bot_h & user_h)}",
+        ),
     ]
     return CheckResult.from_substeps("Bot vs. user cloaking diff.", sub)
 
@@ -77,7 +90,7 @@ async def h1(ctx: CheckContext) -> CheckResult:
           title="No hidden content in rendered HTML", estimate_ms=20_000)
 async def h2(ctx: CheckContext) -> CheckResult:
     raw = await fetch(ctx)
-    rendered = await browser.render_page(ctx.url)
+    rendered = await browser.render_page(ctx.url, collect_hidden=True)
     if rendered.get("error"):
         return CheckResult(Status.FAIL, summary=f"render failed: {rendered['error']}")
     # Match scopes: rendered comes from Playwright's `main, article || body` innerText,
@@ -92,17 +105,10 @@ async def h2(ctx: CheckContext) -> CheckResult:
     raw_norm = _normalize_for_compare(raw_text)
     rendered_norm = _normalize_for_compare(rendered_text)
     sim = _similarity(raw_norm, rendered_norm)
-    # CSS/inline tricks check.
-    suspicious_html_patterns = [
-        r"display\s*:\s*none",
-        r"visibility\s*:\s*hidden",
-        r"text-indent\s*:\s*-?\d{4,}",
-        r"color\s*:\s*#?(?:fff|ffffff|white)\b",
-    ]
-    flagged: list[str] = []
-    for pat in suspicious_html_patterns:
-        if re.search(pat, raw.text or "", re.I):
-            flagged.append(pat)
+    # Computed-style cloaking scan (replaces the old raw-HTML regex, which matched any inline
+    # `display:none` and so fired on ordinary UI). `hidden` carries only the abuse signatures
+    # the browser actually computed — white-on-white, off-screen text-indent, sub-1px font.
+    hidden = rendered.get("hidden") or []
     sub = [
         SubStep(
             "raw vs. rendered text similarity",
@@ -110,9 +116,11 @@ async def h2(ctx: CheckContext) -> CheckResult:
             detail=f"similarity: {sim:.3f}; raw_len={len(raw_norm)}; rendered_len={len(rendered_norm)}",
         ),
         SubStep(
-            "no CSS hiding tricks in raw HTML",
-            Status.PASS if not flagged else Status.NEEDS_REVIEW,
-            detail=f"flagged patterns: {flagged}" if flagged else "clean",
+            "no computed-style hidden text (white-on-white / off-screen / micro-font)",
+            Status.PASS if not hidden else Status.NEEDS_REVIEW,
+            detail=(f"{len(hidden)} hidden text block(s): "
+                    f"{[(h.get('reason'), h.get('sample')) for h in hidden[:5]]}"
+                    if hidden else "clean"),
         ),
     ]
     return CheckResult.from_substeps("Hidden-content scan.", sub)
