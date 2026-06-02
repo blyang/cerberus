@@ -222,13 +222,15 @@ async def a4(ctx: CheckContext) -> CheckResult:
                            summary=f"URL contains fragment '#{p.fragment}' — content must be addressable without it.",
                            details={"fragment": p.fragment})
     raw = await fetch(ctx)
-    if raw.error or raw.status_code != 200:
-        # Without a successful fetch the hash-routing scan sees empty HTML and
-        # passes by default — fail instead of certifying an unfetched page.
+    # Without the page body the hash-routing scan sees empty HTML and passes by default —
+    # fail instead of certifying an unfetched page. Compare against the audit's expected
+    # status (default 200) so intentional 404/410 audits aren't failed by this guard.
+    if raw.error or raw.status_code != ctx.expected_status:
         return CheckResult(
             Status.FAIL,
-            summary=f"Could not fetch page to scan for hash-routing (status={raw.status_code}).",
-            details={"status": raw.status_code, "error": raw.error},
+            summary=f"Could not fetch page to scan for hash-routing "
+                    f"(status={raw.status_code}, expected {ctx.expected_status}).",
+            details={"status": raw.status_code, "expected": ctx.expected_status, "error": raw.error},
         )
     indicators = ["window.location.hash", "router", "hash"]
     matches = [s for s in indicators if s in raw.text.lower()]
