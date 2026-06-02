@@ -23,6 +23,36 @@ Eight sections, A through H, ~57 checks total:
 | **G** — Internationalization | hreflang reciprocity, x-default, locale URL liveness, locale-adaptive serving (real cluster evaluation when alternates exist) |
 | **H** — Serving integrity | bot-vs-user cloaking (primary-content + heading-set diff), hidden content (computed-style cloaking: white-on-white / off-screen / micro-font), Googlebot-UA ↔ browser render diff via local headless Chromium (GSC URL Inspection is the manual ground-truth fallback) |
 
+## Coverage caveats — checks that don't fully run
+
+Not every check produces a Pass/Fail on every run. Four reasons a check is skipped, N/A, or downgraded:
+
+**1. Feature not built yet — always N/A.** Three checks are skeletons pending a site-graph / "hub" model (per the brief). They always return N/A regardless of the page:
+
+- **D5** — BreadcrumbList structured data
+- **F6** — page is internally linked from a hub *and* links onward
+- **F7** — internal links to the page are crawlable HTML links
+
+**2. Environment-gated — N/A off the listed environments.** These depend on infrastructure that only exists in certain environments (e.g. CDN edge rules configured on prod), so they short-circuit to N/A elsewhere via `applicable_envs`:
+
+| Runs only on | Checks |
+|---|---|
+| Production | B6 (host normalization), E3a-perf (Lighthouse Performance score), F1 (in sitemap), F2 (sitemap declared in robots.txt), F4 (bot access outside robots.txt), F9 (AI crawler policy), F10 (sitemap reachable/valid) |
+| Production + UAT | F3 (robots.txt allows the page), G6 (locale-adaptive serving) |
+
+B6 additionally returns N/A for non-`www` hosts (it only applies to www architectures).
+
+**3. Needs vision / LLM — else Manual.** These auto-classify with the vision/LLM model and fall back to a **Manual** sub-step (surfaced as Needs Review) when no API key is configured or model confidence is low:
+
+- **A2** — flash of materially different content on load
+- **C7** — intrusive interstitial / overlay
+- **E4** — mobile-responsive layout overlap (the DOM sub-steps — horizontal scroll, font size — still run)
+- **D3** — structured-data ↔ visible-content match
+
+**4. Diagnostic — capped at Needs Review.** **H3** (Googlebot vs browser render) is a *local* Chromium simulation, not Google's Web Rendering Service, so it never auto-Passes — its best verdict is Needs Review, with GSC URL Inspection as the manual ground truth.
+
+Beyond these, any check returns N/A when the page simply lacks the element it inspects (no JSON-LD → D2/D3, no `<img>` → C5, no form controls → C4, no hreflang cluster → G1–G5, no internal links → F8). That's expected behaviour, not a coverage gap.
+
 ## Quick start
 
 ```bash
