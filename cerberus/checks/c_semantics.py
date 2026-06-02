@@ -65,7 +65,10 @@ def _accessible_text(el) -> str:
     if el is None:
         return ""
     parts = [el.get_text(strip=True)]
-    parts += [(img.get("alt") or "").strip() for img in el.find_all("img")]
+    # The referenced element may itself be the <img> (aria-labelledby pointing straight at it),
+    # not just contain one — include self alongside descendants.
+    imgs = ([el] if el.name == "img" else []) + el.find_all("img")
+    parts += [(img.get("alt") or "").strip() for img in imgs]
     parts += [t.get_text(strip=True) for t in el.find_all("title")]
     return " ".join(p for p in parts if p)
 
