@@ -39,23 +39,24 @@ class HostConfig:
         # prefix must also catch the bare `/generators` audited URL, not just deep pages.
         return path.startswith(prefix) or path == prefix.rstrip("/")
 
+    @classmethod
+    def _longest_matching_prefix(cls, path: str, prefixes) -> str | None:
+        """The longest configured prefix `path` sits under, or None. On a length tie the
+        first in iteration order wins. `prefixes` may be a list or a dict (keys scanned)."""
+        matching = [p for p in prefixes if cls._path_under(path, p)]
+        return max(matching, key=len) if matching else None
+
     def sitemap_for_url(self, url: str) -> str | None:
         """Sitemap that should contain `url`: the longest matching section prefix wins,
         else the catch-all `sitemap_url`. Lets F1/F10 follow the audited page into its
         own section sitemap (generator pages live in a separate sitemap from /s/ pages)."""
-        path = urlparse(url).path
-        best: tuple[str, str] | None = None
-        for prefix, sm in self.section_sitemaps.items():
-            if self._path_under(path, prefix) and (best is None or len(prefix) > len(best[0])):
-                best = (prefix, sm)
-        return best[1] if best else self.sitemap_url
+        prefix = self._longest_matching_prefix(urlparse(url).path, self.section_sitemaps)
+        return self.section_sitemaps[prefix] if prefix else self.sitemap_url
 
     def pipeline_prefix_for_url(self, url: str) -> str | None:
         """The configured pipeline prefix the audited URL sits under (longest match),
         so F5 probes a nonexistent sibling in the *same* section as the page."""
-        path = urlparse(url).path
-        matching = [p for p in self.pipeline_url_prefixes if self._path_under(path, p)]
-        return max(matching, key=len) if matching else None
+        return self._longest_matching_prefix(urlparse(url).path, self.pipeline_url_prefixes)
 
 
 @dataclasses.dataclass
