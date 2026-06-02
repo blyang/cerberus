@@ -53,7 +53,7 @@ async def b2(ctx: CheckContext) -> CheckResult:
 
 
 @register("B3", section="B", severity=Severity.BLOCKING,
-          title="Canonical points to the preferred URL for this exact page", estimate_ms=2_000)
+          title="Canonical points to the preferred URL for this exact page version", estimate_ms=2_000)
 async def b3(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     canonicals = r.soup.find_all("link", attrs={"rel": lambda v: v and "canonical" in (v if isinstance(v, list) else v.lower().split())})

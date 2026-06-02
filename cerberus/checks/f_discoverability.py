@@ -208,7 +208,7 @@ async def f4(ctx: CheckContext) -> CheckResult:
 
 
 @register("F5", section="F", severity=Severity.BLOCKING,
-          title="Invalid URLs return proper 404 or 410", estimate_ms=4_000)
+          title="Invalid URLs return proper 404 or 410 responses", estimate_ms=4_000)
 async def f5(ctx: CheckContext) -> CheckResult:
     host_cfg = ctx.site_config.for_url(ctx.url)
     if not host_cfg.pipeline_url_prefixes:
@@ -242,7 +242,7 @@ async def f5(ctx: CheckContext) -> CheckResult:
 
 
 @register("F6", section="F", severity=Severity.BLOCKING,
-          title="Page is internally linked from at least one indexable page and links to others",
+          title="Page is internally linked from at least one indexable page and links to at least one other indexable page",
           estimate_ms=500)
 async def f6(_: CheckContext) -> CheckResult:
     # Per brief: F6 reports N/A until hub architecture exists. The "page is linked from a parent

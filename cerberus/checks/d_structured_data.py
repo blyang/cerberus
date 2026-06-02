@@ -107,7 +107,7 @@ def _collect_smv_errors(payload: dict[str, Any]) -> list[str]:
 
 
 @register("D2", section="D", severity=Severity.CONDITIONAL,
-          title="Structured data validates (Schema Markup Validator)", estimate_ms=8_000)
+          title="Structured data validates", estimate_ms=8_000)
 async def d2(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     blocks = _extract_json_ld(r.text, ctx.url)

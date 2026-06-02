@@ -523,7 +523,7 @@ async def e5(ctx: CheckContext) -> CheckResult:
 
 
 @register("E6", section="E", severity=Severity.BLOCKING,
-          title="Mobile and desktop expose the same primary content + directives", estimate_ms=6_000)
+          title="Mobile page exposes the same primary content and critical directives as desktop", estimate_ms=6_000)
 async def e6(ctx: CheckContext) -> CheckResult:
     mobile = await fetch(ctx, user_agent=UA_CHROME_MOBILE, key_suffix="mobile")
     desktop = await fetch(ctx, user_agent=UA_CHROME_DESKTOP)

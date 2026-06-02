@@ -85,7 +85,7 @@ async def c4(ctx: CheckContext) -> CheckResult:
 
 
 @register("C5", section="C", severity=Severity.RECOMMENDED,
-          title="All <img> elements have an alt attribute", estimate_ms=2_000)
+          title="All meaningful images have descriptive alt attributes", estimate_ms=2_000)
 async def c5(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     imgs = r.soup.find_all("img")
@@ -148,7 +148,7 @@ C7_SYSTEM_PROMPT = (
 
 
 @register("C7", section="C", severity=Severity.BLOCKING,
-          title="No intrusive interstitial obscures primary content on arrival", estimate_ms=10_000)
+          title="No intrusive interstitial or overlay obscures primary content on arrival", estimate_ms=10_000)
 async def c7(ctx: CheckContext) -> CheckResult:
     """Vision-classified. Captures first-paint screenshots at mobile + desktop viewports."""
     vcfg = ctx.site_config.vision if ctx.site_config else None

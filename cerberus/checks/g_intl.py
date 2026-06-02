@@ -229,7 +229,7 @@ async def g1(ctx: CheckContext) -> CheckResult:
 
 
 @register("G2", section="G", severity=Severity.BLOCKING,
-          title="Each locale page is canonical to itself", estimate_ms=4_000)
+          title="Each locale page is canonical to itself or its true preferred equivalent", estimate_ms=4_000)
 async def g2(ctx: CheckContext) -> CheckResult:
     cluster = await _build_cluster(ctx)
     if not cluster["alternates"]:
@@ -390,7 +390,7 @@ async def g4(ctx: CheckContext) -> CheckResult:
 
 
 @register("G5", section="G", severity=Severity.BLOCKING,
-          title="Locale alternates use hreflang, not redirects/canonicals", estimate_ms=6_000)
+          title="Locale alternates are related with hreflang, not collapsed with redirects or canonicals", estimate_ms=6_000)
 async def g5(ctx: CheckContext) -> CheckResult:
     cluster = await _build_cluster(ctx)
     if not cluster["alternates"]:
