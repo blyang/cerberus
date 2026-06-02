@@ -6,3 +6,10 @@ __pycache__/
 node_modules/
 .codex-runtime/
 .env
+
+# Local working notes / findings — operator-only, never on the repo
+AGENTS.md
+audit-fix-plan.md
+check-false-pass-audit.md
+generators-desktop-perf-finding.md
+prod-307-redirect-finding.md
