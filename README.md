@@ -5,8 +5,8 @@ A web tool that runs **57 SEO and generative-engine-optimization checks** agains
 - **Backend**: FastAPI + SSE for live progress, SQLite for persistence
 - **Frontend**: vanilla JS + Tailwind CDN, no build step
 - **Vision**: Gemini 2.5 Flash-Lite primary + Qwen-VL fallback for the previously-manual checks (visual flash-on-load, intrusive interstitial, mobile responsiveness)
-- **Performance**: Lighthouse subprocess, mobile + desktop in parallel
-- **Browser**: Playwright Chromium (shared pool)
+- **Performance**: Lighthouse via PageSpeed Insights API *or* local CLI subprocess (config-selectable), mobile + desktop in parallel
+- **Browser**: Playwright Chromium (shared pool) — also drives the local Googlebot-UA render diff and computed-style hidden-text scan
 
 ## What it checks
 
@@ -16,12 +16,12 @@ Eight sections, A through H, ~57 checks total:
 |---|---|
 | **A** — Rendering & status | SSR vs client-rendered text, HTTP status, fragments, flash-on-load (vision) |
 | **B** — Indexability | title/description, canonical, redirect canonicalization, host normalization, noindex/nosnippet, lang/charset/viewport, OG + Twitter, og:image dimensions, favicon, lowercase URLs |
-| **C** — Semantics | heading structure, form labels, alt text, semantic wrappers, intrusive interstitials (vision) |
+| **C** — Semantics | heading structure, form-control labeling (resolves `aria-labelledby` / `<label>` / `aria-label` to a real accessible name, incl. `<img alt>` / `<svg><title>`), alt-text coverage (flags empty alt on informative images), semantic wrappers, intrusive interstitials (vision) |
 | **D** — Structured data | JSON-LD validation, JSON-LD ↔ visible content match |
-| **E** — Performance | LCP, CLS, INP, perf+SEO+a11y+best-practices scores, mobile responsiveness (DOM + vision), tap targets, mobile↔desktop parity, mixed content, HSTS |
-| **F** — Discoverability | sitemap entry, robots.txt, bot access, soft-404 detection, internal linking, AI crawler policy |
+| **E** — Performance | LCP, CLS, INP, perf+SEO+a11y+best-practices scores (Lighthouse via PSI or local CLI), mobile responsiveness (DOM + vision), tap targets, mobile↔desktop parity, mixed content, HSTS |
+| **F** — Discoverability | sitemap entry (section-aware: follows the URL into its owning sitemap), robots.txt, bot access (bot-only challenge markers), soft-404 detection (probes a sibling in the URL's own section), internal linking, AI crawler policy |
 | **G** — Internationalization | hreflang reciprocity, x-default, locale URL liveness, locale-adaptive serving (real cluster evaluation when alternates exist) |
-| **H** — Serving integrity | bot-vs-user cloaking, hidden content, Googlebot↔browser render diff (via GSC URL Inspection API) |
+| **H** — Serving integrity | bot-vs-user cloaking (primary-content + heading-set diff), hidden content (computed-style cloaking: white-on-white / off-screen / micro-font), Googlebot-UA ↔ browser render diff via local headless Chromium (GSC URL Inspection is the manual ground-truth fallback) |
 
 ## Quick start
 
@@ -41,17 +41,43 @@ source .venv/bin/activate
 python run.py
 ```
 
+### Per-host configuration (`site_config.yaml`)
+
+Each host entry can set:
+
+- `sitemap_url` — catch-all sitemap; `section_sitemaps` (`prefix → sitemap`) routes
+  a URL into the sitemap that actually owns it (e.g. `/generators/` pages live in a
+  separate sitemap from `/s/` pages). F1/F10 follow the audited URL's prefix.
+- `pipeline_url_prefixes` — the URL sections this host serves; F5 builds its
+  nonexistent-URL 404 probe under the audited page's *own* prefix.
+- `supported_languages` — locales to evaluate for the G (hreflang) checks.
+
+Top-level (not per-host) settings include `default_url`, `vision`, and
+`lighthouse`:
+
+- `lighthouse.source` — `psi` (PageSpeed Insights API; scores match
+  pagespeed.web.dev but the audited URL must be publicly reachable) or `local`
+  (local `lighthouse` CLI; works on internal/preprod hosts but scores vary with
+  CPU load). Applies to every host, so a `psi` default fails the E-checks on a
+  preprod/internal `default_url` until you point at a public URL or switch to
+  `local`.
+
 Open `http://127.0.0.1:8000` (or `http://<tailnet-ip>:8000` from another device on the same Tailscale network). Paste a URL, click Run, watch the live progress, then download the prioritized markdown report when complete.
 
 ## Architecture
 
 ```
 cerberus/
-  checks/{a..h}_*.py    — 57 checks registered via @register decorator
+  checks/{a..h}_*.py    — 58 check functions registered via @register decorator
+                          (57 brief checks; E3a runs as E3a-perf + E3a-seo)
+  config.py             — per-host site_config.yaml loader (sitemaps, pipeline
+                          prefixes, supported locales, vision + lighthouse source)
   runner.py             — async worker, per-run pub/sub, bounded parallelism
   store.py              — SQLite persistence
-  lighthouse.py         — subprocess wrapper, parallel mobile + desktop
-  browser.py            — Playwright pool, screenshot helpers, Slow-3G frame capture
+  lighthouse.py         — fixture builder: PageSpeed Insights API or local CLI
+                          subprocess (config-selectable), parallel mobile + desktop
+  browser.py            — Playwright pool, screenshot helpers, Slow-3G frame capture,
+                          computed-style hidden-text scan
   vision.py             — Gemini Flash-Lite primary + Qwen-VL fallback, structured JSON output
   report.py + verify_steps.py
                         — prioritized dev-team report with reproduce + pass-condition steps
