@@ -249,3 +249,51 @@ have descriptive alt attributes" while the code only checks `alt`-attribute
 *presence* — that reads PASS as "alt text is good" when it isn't. If you want
 the stronger title, upgrade the check first (C5 is an open false-pass item in
 `audit-fix-plan.md`); don't let the title get ahead of the logic.
+
+## Computed-style hidden-text detection (H2) is a false-positive minefield
+
+`browser._HIDDEN_TEXT_JS` (used by H2 via `render_page(..., collect_hidden=True)`)
+flags white-on-white / off-screen text-indent / sub-1px font via *computed*
+style. Getting it low-false-positive took several iterations; don't undo these
+guards (each one stops a real false flag on ordinary Strikingly pages):
+
+- **Parse color alpha.** `getComputedStyle` returns the default body background
+  as `rgba(0,0,0,0)`; a naive digit-regex reads that as opaque **black**, so
+  every normal black-text page flags as white/colored-on-matching. Treat
+  alpha 0 as "no color" and keep looking.
+- **Resolve the *effective* background up the ancestor chain**, not the
+  element's own (usually transparent) bg. White is only the final canvas
+  fallback.
+- **Bail the color-match if any ancestor paints a `background-image`/gradient**
+  — light text over a hero image is not white-on-white and we can't sample the
+  image.
+- **`display:none` is not inherited in computed style.** Checking the text
+  node's own parent misses text inside an ancestor-collapsed menu/tab. Use
+  `el.getClientRects().length === 0` to skip ancestor-hidden/detached nodes —
+  genuinely-cloaked off-screen/1px/colored text still lays out (non-empty
+  rects), so only collapsed UI is excluded.
+
+Same trap bit E4's font walker: **`offsetParent === null` is also null for
+visible body-level and `display:contents` text**, so it can't be used as a
+visibility proxy — it drops real copy and stalls the check. Use element-level
+`display`/`visibility`/`opacity` only.
+
+Verify any change here against real renders via `page.set_content(...)` with
+crafted fixtures (black-on-default-body, white-on-dark-section, hero-image,
+collapsed-menu) — the schema/intuition is not enough; these were all caught
+by actually rendering.
+
+## New heuristic sub-steps on BLOCKING checks cap at NEEDS_REVIEW
+
+H1's heading-set Jaccard and H2's cloaking scan are heuristics added to
+BLOCKING checks. They emit at most `NEEDS_REVIEW`, never `FAIL`, so a noisy
+heuristic asks for a human glance instead of hard-failing a legit page. Keep
+new defense-in-depth signals at that ceiling unless the signal is unambiguous.
+
+## C4 accessible name: get_text() drops img alt and svg title
+
+When resolving whether a label/`aria-labelledby` target carries an accessible
+name, `get_text(strip=True)` returns "" for an icon-only `<img alt="Search">`
+or `<svg><title>…</title>`. Use `_accessible_text()` (folds in descendant —
+and self, since `aria-labelledby` can point straight at the `<img>` — alt and
+svg-title text). A text-only check false-fails valid icon-labelled controls.
