@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from .. import browser, screenshots, vision
 from ._utils import fetch
@@ -64,24 +65,74 @@ async def c4(ctx: CheckContext) -> CheckResult:
     inputs = r.soup.find_all(["input", "textarea", "select"])
     if not inputs:
         return CheckResult(Status.NA, summary="No form inputs on page.")
-    unmatched: list[str] = []
+    soup = r.soup
+    unmatched: list[str] = []   # no labeling mechanism at all
+    broken: list[str] = []      # mechanism present but empty / dangling reference
     for inp in inputs:
         if (inp.get("type") or "").lower() in ("hidden", "submit", "button", "image", "reset"):
             continue
-        if inp.get("aria-label") or inp.get("aria-labelledby"):
+        if (inp.get("aria-label") or "").strip():
             continue
-        # Wrapped <label>?
-        if any(parent.name == "label" for parent in inp.parents):
+        labelledby = (inp.get("aria-labelledby") or "").strip()
+        if labelledby:
+            # Every referenced id must exist, and at least one must carry non-empty text —
+            # `aria-labelledby="missing-id"` or refs to empty nodes leave the control unlabelled.
+            refs = [soup.find(id=tok) for tok in labelledby.split()]
+            if any(ref is None for ref in refs) or not any(
+                    (ref.get_text(strip=True) if ref else "") for ref in refs):
+                broken.append(str(inp)[:120])
+            continue
+        wrapping = next((par for par in inp.parents if par.name == "label"), None)
+        if wrapping is not None:
+            if not wrapping.get_text(strip=True):
+                broken.append(str(inp)[:120])
             continue
         inp_id = inp.get("id")
-        if inp_id and r.soup.find("label", attrs={"for": inp_id}):
-            continue
+        if inp_id:
+            lbl = soup.find("label", attrs={"for": inp_id})
+            if lbl is not None:
+                if not lbl.get_text(strip=True):
+                    broken.append(str(inp)[:120])
+                continue
         unmatched.append(str(inp)[:120])
-    if unmatched:
-        return CheckResult(Status.FAIL,
-                           summary=f"{len(unmatched)} unlabelled input(s).",
-                           details={"unmatched_sample": unmatched[:5]})
-    return CheckResult(Status.PASS, summary=f"All {len(inputs)} form controls have labels or aria-label.")
+    sub = [
+        SubStep(
+            "Every input has a labeling mechanism",
+            Status.PASS if not unmatched else Status.FAIL,
+            detail=(f"{len(unmatched)} unlabelled input(s): {unmatched[:5]}" if unmatched
+                    else f"all {len(inputs)} controls reference a label or aria-label"),
+        ),
+        SubStep(
+            "Label references resolve to non-empty text",
+            Status.PASS if not broken else Status.FAIL,
+            detail=(f"{len(broken)} input(s) with empty/dangling label refs: {broken[:5]}" if broken
+                    else "all label references resolve"),
+        ),
+    ]
+    return CheckResult.from_substeps(f"Form-control labeling across {len(inputs)} control(s).", sub)
+
+
+# Filenames that signal a decorative/spacer image, where empty alt is correct.
+_DECORATIVE_NAME_RE = re.compile(
+    r"(spacer|blank|pixel|1x1|transparent|separator|divider|placeholder|clear|shim)", re.I)
+
+
+def _img_is_informative(img) -> bool:
+    """An empty-alt image is *suspect* (empty alt may be wrong) when it still likely conveys
+    meaning: it links somewhere, or its filename is descriptive. Explicit decorative markers
+    (role=presentation/none, aria-hidden=true) or spacer-style filenames mean empty alt is
+    correct, so those are not flagged."""
+    if (img.get("role") or "").lower() in ("presentation", "none"):
+        return False
+    if (img.get("aria-hidden") or "").lower() == "true":
+        return False
+    if any(par.name == "a" for par in img.parents):
+        return True
+    src = img.get("src") or img.get("data-src") or ""
+    stem = src.rsplit("/", 1)[-1].split("?", 1)[0].rsplit(".", 1)[0]
+    if not stem or _DECORATIVE_NAME_RE.search(stem):
+        return False
+    return bool(re.search(r"[a-z]{3,}", stem, re.I))
 
 
 @register("C5", section="C", severity=Severity.RECOMMENDED,
@@ -92,11 +143,28 @@ async def c5(ctx: CheckContext) -> CheckResult:
     if not imgs:
         return CheckResult(Status.NA, summary="No <img> elements on page.")
     missing = [img for img in imgs if "alt" not in img.attrs]
-    if missing:
-        return CheckResult(Status.FAIL,
-                           summary=f"{len(missing)} of {len(imgs)} <img> missing alt attribute.",
-                           details={"missing_sample": [str(i)[:120] for i in missing[:5]]})
-    return CheckResult(Status.PASS, summary=f"All {len(imgs)} <img> have alt attributes.")
+    # alt="" is *valid* for decorative images but a defect on informative ones — surface the
+    # latter for review rather than passing every empty alt (the old presence-only check).
+    empty_informative = [
+        img for img in imgs
+        if "alt" in img.attrs and not (img.get("alt") or "").strip() and _img_is_informative(img)
+    ]
+    sub = [
+        SubStep(
+            "All <img> have an alt attribute",
+            Status.PASS if not missing else Status.FAIL,
+            detail=(f"{len(missing)} of {len(imgs)} missing alt: {[str(i)[:100] for i in missing[:5]]}"
+                    if missing else f"all {len(imgs)} present"),
+        ),
+        SubStep(
+            "Informative images have non-empty alt text",
+            Status.PASS if not empty_informative else Status.NEEDS_REVIEW,
+            detail=(f"{len(empty_informative)} empty-alt image(s) look informative "
+                    f"(linked or descriptive filename): {[str(i)[:100] for i in empty_informative[:5]]}"
+                    if empty_informative else "no suspect empty-alt images"),
+        ),
+    ]
+    return CheckResult.from_substeps(f"Alt-text coverage across {len(imgs)} image(s).", sub)
 
 
 @register("C6", section="C", severity=Severity.RECOMMENDED,
