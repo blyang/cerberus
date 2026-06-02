@@ -58,6 +58,18 @@ async def c1(ctx: CheckContext) -> CheckResult:
     return CheckResult.from_substeps("Heading structure.", sub)
 
 
+def _accessible_text(el) -> str:
+    """Accessible name an element contributes to a label: its visible text PLUS alt text from
+    descendant <img> and SVG <title> — both of which get_text() drops. Icon-only controls
+    labelled via `<img alt>`/`<svg><title>` have a valid name even with no text node."""
+    if el is None:
+        return ""
+    parts = [el.get_text(strip=True)]
+    parts += [(img.get("alt") or "").strip() for img in el.find_all("img")]
+    parts += [t.get_text(strip=True) for t in el.find_all("title")]
+    return " ".join(p for p in parts if p)
+
+
 @register("C4", section="C", severity=Severity.RECOMMENDED,
           title="All form inputs have associated <label> elements", estimate_ms=2_000)
 async def c4(ctx: CheckContext) -> CheckResult:
@@ -80,19 +92,19 @@ async def c4(ctx: CheckContext) -> CheckResult:
             # when NO referenced id resolves to text (`aria-labelledby="missing-id"`, or all
             # refs empty). A partially-dangling list that still has one real label is fine.
             refs = [soup.find(id=tok) for tok in labelledby.split()]
-            if not any((ref.get_text(strip=True) if ref else "") for ref in refs):
+            if not any(_accessible_text(ref) for ref in refs):
                 broken.append(str(inp)[:120])
             continue
         wrapping = next((par for par in inp.parents if par.name == "label"), None)
         if wrapping is not None:
-            if not wrapping.get_text(strip=True):
+            if not _accessible_text(wrapping):
                 broken.append(str(inp)[:120])
             continue
         inp_id = inp.get("id")
         if inp_id:
             lbl = soup.find("label", attrs={"for": inp_id})
             if lbl is not None:
-                if not lbl.get_text(strip=True):
+                if not _accessible_text(lbl):
                     broken.append(str(inp)[:120])
                 continue
         unmatched.append(str(inp)[:120])
