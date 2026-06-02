@@ -179,21 +179,36 @@ async def f4(ctx: CheckContext) -> CheckResult:
         Status.PASS if bot_r.status_code == 200 else Status.FAIL,
         detail=f"bot status={bot_r.status_code}; user status={user_r.status_code}",
     ))
-    challenge_indicators = ["cf-challenge", "captcha", "are you human", "challenge-platform", "/cdn-cgi/"]
     bot_body = (bot_r.text or "").lower()
     user_body = (user_r.text or "").lower()
-    # A marker is evidence of a block only if the bot sees it and a normal user does not —
-    # that asymmetry is what a challenge/cloak looks like. Markers present for BOTH visitors
-    # are ordinary page content (e.g. the reCAPTCHA/hCAPTCHA risk-control config this page
-    # legitimately embeds), not a bot-targeted interstitial, so they must not fail F4.
-    bot_only = [s for s in challenge_indicators if s in bot_body and s not in user_body]
-    shared = [s for s in challenge_indicators if s in bot_body and s in user_body]
+    # Markers split by whether they can legitimately appear on a normal content page.
+    #
+    # Interstitial markers (a Cloudflare/JS challenge page served *instead of* content) never
+    # appear on a real page, so the bot seeing one is a block regardless of the normal user —
+    # if it's shared, the whole site is challenge-walled and Googlebot is starved all the same.
+    # (No bare "/cdn-cgi/": that path is on every CF-fronted page via Rocket Loader/analytics,
+    # so it appears for the normal user too; "challenge-platform" covers the challenge sub-path.)
+    interstitial_markers = ["cf-challenge", "challenge-platform"]
+    # Widget markers can appear inline on a normal page (embedded reCAPTCHA/hCAPTCHA risk
+    # controls this page legitimately ships). They only signal a block under the cloak
+    # asymmetry — bot sees them, a normal user does not. Shared == ordinary embedded widget.
+    widget_markers = ["captcha", "are you human"]
+    interstitial = [s for s in interstitial_markers if s in bot_body]
+    widget_bot_only = [s for s in widget_markers if s in bot_body and s not in user_body]
+    blocking = interstitial + widget_bot_only
+    shared_widgets = [s for s in widget_markers if s in bot_body and s in user_body]
+    if blocking:
+        detail = f"blocking markers (bot is served a challenge): {blocking}"
+        if interstitial and all(s in user_body for s in interstitial):
+            detail += " — challenge served to ALL visitors, not just the bot"
+    elif shared_widgets:
+        detail = f"clean (widget markers shared with normal user, not bot-specific: {shared_widgets})"
+    else:
+        detail = "clean"
     sub.append(SubStep(
-        "No bot-specific challenge/captcha markers",
-        Status.PASS if not bot_only else Status.FAIL,
-        detail=(f"bot-only markers: {bot_only}" if bot_only
-                else (f"clean (markers shared with normal user, not bot-specific: {shared})"
-                      if shared else "clean")),
+        "No challenge/captcha block on the bot",
+        Status.PASS if not blocking else Status.FAIL,
+        detail=detail,
     ))
     # Compare body sizes — wildly different may indicate cloaking/blocking.
     if bot_r.status_code == 200 and user_r.status_code == 200:

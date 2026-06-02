@@ -33,6 +33,12 @@ class HostConfig:
             return self.robots_url
         return f"https://{self.host}/robots.txt"
 
+    @staticmethod
+    def _path_under(path: str, prefix: str) -> bool:
+        # Match the section root with or without its trailing slash: a `/generators/`
+        # prefix must also catch the bare `/generators` audited URL, not just deep pages.
+        return path.startswith(prefix) or path == prefix.rstrip("/")
+
     def sitemap_for_url(self, url: str) -> str | None:
         """Sitemap that should contain `url`: the longest matching section prefix wins,
         else the catch-all `sitemap_url`. Lets F1/F10 follow the audited page into its
@@ -40,7 +46,7 @@ class HostConfig:
         path = urlparse(url).path
         best: tuple[str, str] | None = None
         for prefix, sm in self.section_sitemaps.items():
-            if path.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+            if self._path_under(path, prefix) and (best is None or len(prefix) > len(best[0])):
                 best = (prefix, sm)
         return best[1] if best else self.sitemap_url
 
@@ -48,7 +54,7 @@ class HostConfig:
         """The configured pipeline prefix the audited URL sits under (longest match),
         so F5 probes a nonexistent sibling in the *same* section as the page."""
         path = urlparse(url).path
-        matching = [p for p in self.pipeline_url_prefixes if path.startswith(p)]
+        matching = [p for p in self.pipeline_url_prefixes if self._path_under(path, p)]
         return max(matching, key=len) if matching else None
 
 
@@ -102,9 +108,10 @@ class SiteConfig:
                 apex_host=entry.get("apex_host") or _infer_apex(host),
                 sitemap_url=entry.get("sitemap_url"),
                 robots_url=entry.get("robots_url"),
-                pipeline_url_prefixes=list(entry.get("pipeline_url_prefixes", [])),
+                # str() guards against YAML bool coercion (`no`/`yes`/`on`/`off` parse as bools);
+                # these prefixes are iterated with path.startswith(), which raises on a bool.
+                pipeline_url_prefixes=[str(p) for p in entry.get("pipeline_url_prefixes", [])],
                 allowed_bots=list(entry.get("allowed_bots") or self.defaults.get("allowed_bots", [])),
-                # str() guards against YAML bool coercion (`no`/`yes`/`on`/`off` parse as bools).
                 supported_languages=[str(s).lower() for s in sl] if sl is not None else None,
                 section_sitemaps={str(k): str(v) for k, v in (entry.get("section_sitemaps") or {}).items()},
                 explicit=True,

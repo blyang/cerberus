@@ -85,7 +85,7 @@ async def c4(ctx: CheckContext) -> CheckResult:
 
 
 @register("C5", section="C", severity=Severity.RECOMMENDED,
-          title="All meaningful images have descriptive alt attributes", estimate_ms=2_000)
+          title="All <img> elements have an alt attribute", estimate_ms=2_000)
 async def c5(ctx: CheckContext) -> CheckResult:
     r = await fetch(ctx)
     imgs = r.soup.find_all("img")
