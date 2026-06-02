@@ -22,12 +22,34 @@ class HostConfig:
     # `zh-CN` → `zh`) is not in this list. Use to mute G failures for locales the page advertises
     # but the site does not actually serve. None = no filtering (all advertised locales evaluated).
     supported_languages: list[str] | None = None
+    # Maps a URL path prefix to the sitemap that owns pages under it (e.g.
+    # `/generators/` → the generators sitemap). A host can have several section
+    # sitemaps; `sitemap_url` is the catch-all when no prefix matches.
+    section_sitemaps: dict[str, str] = dataclasses.field(default_factory=dict)
     explicit: bool = False  # True if host was found in config; False if inferred
 
     def robots_url_resolved(self) -> str:
         if self.robots_url:
             return self.robots_url
         return f"https://{self.host}/robots.txt"
+
+    def sitemap_for_url(self, url: str) -> str | None:
+        """Sitemap that should contain `url`: the longest matching section prefix wins,
+        else the catch-all `sitemap_url`. Lets F1/F10 follow the audited page into its
+        own section sitemap (generator pages live in a separate sitemap from /s/ pages)."""
+        path = urlparse(url).path
+        best: tuple[str, str] | None = None
+        for prefix, sm in self.section_sitemaps.items():
+            if path.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+                best = (prefix, sm)
+        return best[1] if best else self.sitemap_url
+
+    def pipeline_prefix_for_url(self, url: str) -> str | None:
+        """The configured pipeline prefix the audited URL sits under (longest match),
+        so F5 probes a nonexistent sibling in the *same* section as the page."""
+        path = urlparse(url).path
+        matching = [p for p in self.pipeline_url_prefixes if path.startswith(p)]
+        return max(matching, key=len) if matching else None
 
 
 @dataclasses.dataclass
@@ -84,6 +106,7 @@ class SiteConfig:
                 allowed_bots=list(entry.get("allowed_bots") or self.defaults.get("allowed_bots", [])),
                 # str() guards against YAML bool coercion (`no`/`yes`/`on`/`off` parse as bools).
                 supported_languages=[str(s).lower() for s in sl] if sl is not None else None,
+                section_sitemaps={str(k): str(v) for k, v in (entry.get("section_sitemaps") or {}).items()},
                 explicit=True,
             )
         return HostConfig(

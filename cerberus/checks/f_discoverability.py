@@ -71,7 +71,8 @@ async def _gather_sitemap_urls(ctx: CheckContext, sitemap_url: str, depth: int =
           applicable_envs={Env.PRODUCTION})
 async def f1(ctx: CheckContext) -> CheckResult:
     host_cfg = ctx.site_config.for_url(ctx.url)
-    if not host_cfg.sitemap_url:
+    sitemap_url = host_cfg.sitemap_for_url(ctx.url)
+    if not sitemap_url:
         # Fallback: try to discover from robots.txt. If not declared there either, fail with
         # an explicit config-missing message (per brief TC4: "site config missing.").
         robots_r = await fetch_url(ctx, host_cfg.robots_url_resolved())
@@ -84,8 +85,6 @@ async def f1(ctx: CheckContext) -> CheckResult:
                                  f"or add a Sitemap: directive to robots.txt."},
             )
         sitemap_url = m.group(1).strip()
-    else:
-        sitemap_url = host_cfg.sitemap_url
 
     urls, errors = await _gather_sitemap_urls(ctx, sitemap_url)
     target = normalize_url(ctx.url)
@@ -212,8 +211,18 @@ async def f5(ctx: CheckContext) -> CheckResult:
                              f"a list of URL path prefixes for this pipeline (e.g. ['/s/'])."},
         )
     p = urlparse(ctx.url)
-    prefixes = host_cfg.pipeline_url_prefixes
-    nonexistent = f"{p.scheme}://{p.hostname}{prefixes[0].rstrip('/')}/cerberus-nonexistent-{abs(hash(ctx.url)) % 100000}"
+    prefix = host_cfg.pipeline_prefix_for_url(ctx.url)
+    if prefix is None:
+        # Probing prefixes[0] regardless of the audited URL's section tested the wrong
+        # subsystem (e.g. a /generators/ page probed /s/website/, which 301s). If the URL
+        # isn't under any configured prefix, say so rather than emit a misleading FAIL.
+        return CheckResult(
+            Status.NEEDS_REVIEW,
+            summary=f"audited URL is not under any configured pipeline_url_prefix; "
+                    f"cannot build a representative nonexistent URL to probe.",
+            details={"path": p.path, "pipeline_url_prefixes": host_cfg.pipeline_url_prefixes},
+        )
+    nonexistent = f"{p.scheme}://{p.hostname}{prefix.rstrip('/')}/cerberus-nonexistent-{abs(hash(ctx.url)) % 100000}"
     r = await fetch_url(ctx, nonexistent, follow_redirects=False)
     if r.status_code in (404, 410):
         return CheckResult(Status.PASS, summary=f"{nonexistent} → {r.status_code}",
@@ -370,9 +379,10 @@ async def f9(ctx: CheckContext) -> CheckResult:
           applicable_envs={Env.PRODUCTION})
 async def f10(ctx: CheckContext) -> CheckResult:
     host_cfg = ctx.site_config.for_url(ctx.url)
-    if not host_cfg.sitemap_url:
+    sitemap_url = host_cfg.sitemap_for_url(ctx.url)
+    if not sitemap_url:
         return CheckResult(Status.NA, summary=f"No sitemap_url configured for {host_cfg.host}.")
-    r = await fetch_url(ctx, host_cfg.sitemap_url)
+    r = await fetch_url(ctx, sitemap_url)
     if r.status_code != 200:
         return CheckResult(Status.FAIL, summary=f"sitemap returned {r.status_code}")
     ct = (r.headers.get("content-type") or "").lower()

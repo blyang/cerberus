@@ -5,13 +5,18 @@
 hosts:
   www.strikingly.com:
     apex_host: strikingly.com
-    sitemap_url: https://www.strikingly.com/sitemap-seo-pages.xml
+    sitemap_url: https://www.strikingly.com/sitemap_mainsite.xml
     robots_url: https://www.strikingly.com/robots.txt
     pipeline_url_prefixes:
       - /s/website/
       - /s/portfolio/
       - /s/landing-page/
       - /s/
+      - /generators/
+    # Generator pages (Stage 2) live in their own sitemap, not sitemap_mainsite.xml.
+    # F1/F10 follow the audited URL's prefix to the right sitemap.
+    section_sitemaps:
+      /generators/: https://www.strikingly.com/generators/sitemap.xml
     allowed_bots:
       - Googlebot
       - Bingbot
