@@ -180,12 +180,20 @@ async def f4(ctx: CheckContext) -> CheckResult:
         detail=f"bot status={bot_r.status_code}; user status={user_r.status_code}",
     ))
     challenge_indicators = ["cf-challenge", "captcha", "are you human", "challenge-platform", "/cdn-cgi/"]
-    body_lower = (bot_r.text or "").lower()
-    suspicious = [s for s in challenge_indicators if s in body_lower]
+    bot_body = (bot_r.text or "").lower()
+    user_body = (user_r.text or "").lower()
+    # A marker is evidence of a block only if the bot sees it and a normal user does not —
+    # that asymmetry is what a challenge/cloak looks like. Markers present for BOTH visitors
+    # are ordinary page content (e.g. the reCAPTCHA/hCAPTCHA risk-control config this page
+    # legitimately embeds), not a bot-targeted interstitial, so they must not fail F4.
+    bot_only = [s for s in challenge_indicators if s in bot_body and s not in user_body]
+    shared = [s for s in challenge_indicators if s in bot_body and s in user_body]
     sub.append(SubStep(
-        "No challenge/captcha markers in bot response",
-        Status.PASS if not suspicious else Status.FAIL,
-        detail=f"matches: {suspicious}" if suspicious else "clean",
+        "No bot-specific challenge/captcha markers",
+        Status.PASS if not bot_only else Status.FAIL,
+        detail=(f"bot-only markers: {bot_only}" if bot_only
+                else (f"clean (markers shared with normal user, not bot-specific: {shared})"
+                      if shared else "clean")),
     ))
     # Compare body sizes — wildly different may indicate cloaking/blocking.
     if bot_r.status_code == 200 and user_r.status_code == 200:
